@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "ChessVision Lab - Leitura Local",
+  "version": "1.0.0",
+  "description": "Lê a posição do tabuleiro visível do Chess.com e envia para um analisador local.",
+  "permissions": [],
+  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [{
+    "matches": ["https://www.chess.com/*", "https://chess.com/*"],
+    "js": ["board_reader.js"],
+    "run_at": "document_idle"
+  }]
+}

@@ -1,0 +1,14 @@
+ChessVision Manager 1.0 — verificação de entrega
+
+PASSOU: testes Go do backend (go test ./...).
+PASSOU: self-test de extração do payload.
+PASSOU: compilação cruzada helper PE32+ Windows x64.
+PASSOU: build React/Vite de produção.
+PASSOU: 3 testes do protocolo de ações e etapas.
+PASSOU: teste de fluxos React em DOM com ponte IPC simulada.
+PASSOU: testes existentes da extensão (8 leitor + 3 service worker).
+PASSOU: compilação sintática Python e verificação sintática main/preload Electron.
+NÃO VALIDADO: renderização visual; Chromium bloqueado por restrição a sockets.
+NÃO VALIDADO: instalação/execução nativa no Windows, downloads completos e comunicação com navegador real.
+
+O teste DOM simula somente a ponte IPC; não comprova downloads, processos Windows ou renderização gráfica.

@@ -1,0 +1,4 @@
+const test=require('node:test');const assert=require('node:assert/strict');const{parseStage,safeAction}=require('../electron/protocol.cjs');
+test('extrai etapas reais do instalador',()=>{assert.deepEqual(parseStage(' ETAPA 4/7 - Motor Stockfish 19 - oficial'),{number:4,title:'Motor Stockfish 19 - oficial'});assert.equal(parseStage('pip install finalizado'),null)});
+test('somente ações explícitas chegam ao processo local',()=>{for(const action of ['__proto__','constructor','cmd','-reparar',null,{}])assert.throws(()=>safeAction(action));assert.deepEqual(safeAction('launch'),['-abrir']);assert.deepEqual(safeAction('install'),['-administrador','-apenas-instalar']);});
+test('argumentos não podem ser alterados pelo chamador',()=>{const args=safeAction('install');args.push('arbitrario');assert.equal(safeAction('install').length,2);});

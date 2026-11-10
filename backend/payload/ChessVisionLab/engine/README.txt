@@ -1,0 +1,1 @@
+ChessVision Lab - Stockfish 19 setup downloads engine at install time.
