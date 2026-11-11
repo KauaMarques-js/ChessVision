@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import chess
@@ -29,6 +31,103 @@ def render(board, orientation='white', highlight=None, highlights=None):
 
 
 class ScreenReaderTests(unittest.TestCase):
+    def test_repeated_lost_frames_request_background_relocation(self):
+        ui=app.ChessVisionUI.__new__(app.ChessVisionUI)
+        ui.state=app.AnalysisState()
+        ui.state.screen_active=True
+        ui.capture_generation=9
+        reader=ScreenBoardReader(render(chess.Board()))
+        class Stop:
+            count=0
+            def is_set(self):return self.count>=5
+            def wait(self,_):self.count+=1
+        with patch('PIL.ImageGrab.grab',side_effect=OSError('window moved')):
+            ui.read_screen(reader,(0,0,480,480),Stop())
+        events=[]
+        while not ui.state.ui_events.empty():events.append(ui.state.ui_events.get_nowait())
+        self.assertIn(('relocalize',9),events)
+        self.assertTrue(ui.state.screen_paused)
+        self.assertIsNone(ui.state.board)
+
+    def test_missed_moves_request_confirmation_instead_of_staying_stuck(self):
+        ui=app.ChessVisionUI.__new__(app.ChessVisionUI)
+        ui.state=app.AnalysisState()
+        ui.state.screen_active=True
+        ui.state.receive({'source':'Captura de tela','placement':chess.STARTING_BOARD_FEN})
+        ui.capture_generation=11
+        reader=ScreenBoardReader(render(chess.Board()))
+        board=chess.Board()
+        for move in ('e4','e5','Nf3'):board.push_san(move)
+        class Stop:
+            count=0
+            def is_set(self):return self.count>=12
+            def wait(self,_):self.count+=1
+        with patch('PIL.ImageGrab.grab',return_value=render(board)):
+            ui.read_screen(reader,(0,0,480,480),Stop())
+        events=[]
+        while not ui.state.ui_events.empty():events.append(ui.state.ui_events.get_nowait())
+        self.assertIn(('relocalize',11),events)
+        self.assertEqual(ui.state.tracker.board.board_fen(),chess.STARTING_BOARD_FEN)
+        self.assertEqual(ui.state.pending_screen,board.board_fen())
+
+    def test_saved_references_read_midgame_after_restart_and_relocation(self):
+        initial=ScreenBoardReader(render(chess.Board()))
+        board=chess.Board()
+        for move in ('e4','e5','Nf3','Nc6','Bb5','a6'):board.push_san(move)
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'reader_templates.json'
+            initial.save(path)
+            restored=ScreenBoardReader.load(path)
+            self.assertEqual(restored.read(render(board)),board.board_fen())
+            resized=render(board).resize((384,384),Image.Resampling.LANCZOS)
+            self.assertEqual(restored.for_region(resized.size).read(resized),board.board_fen())
+            path.write_text('[]',encoding='utf-8')
+            with self.assertRaises(ValueError):ScreenBoardReader.load(path)
+
+    def test_background_search_ignores_own_board_and_waits_for_real_game(self):
+        own=(10,20,490,500)
+        before=Image.new('RGB',(1100,650),'#202433')
+        before.paste(render(chess.Board()),own[:2])
+        game=chess.Board()
+        for move in ('e4','e5','Nf3'):game.push_san(move)
+        after=before.copy()
+        after.paste(render(game),(580,130))
+        ui=app.ChessVisionUI.__new__(app.ChessVisionUI)
+        ui.state=app.AnalysisState()
+        ui.screen_reader=ScreenBoardReader(render(chess.Board()))
+        ui.search_exclusions=[own]
+        class Stop:
+            stopped=False
+            count=0
+            def is_set(self):return self.stopped or self.count>6
+            def set(self):self.stopped=True
+            def wait(self,_):self.count+=1
+        with patch('PIL.ImageGrab.grab',side_effect=[OSError('hidden'),before,after,after]):
+            ui.search_game(7,Stop())
+        events=[]
+        while not ui.state.ui_events.empty():events.append(ui.state.ui_events.get_nowait())
+        ready=[event for event in events if event[0]=='search_ready']
+        self.assertEqual(len(ready),1)
+        self.assertEqual(ready[0][1],7)
+        self.assertEqual(ready[0][3],[(580,130,1060,610)])
+        self.assertIsNone(ui.state.board)
+
+    def test_midgame_confirmation_requires_turn_and_preserves_legal_history(self):
+        state=app.AnalysisState()
+        board=chess.Board()
+        for move in ('e4','e5','Nf3'):board.push_san(move)
+        placement=board.board_fen()
+        with self.assertRaises(ValueError):state.confirm_screen_position(placement,None,'white')
+        self.assertIsNone(state.board)
+        state.confirm_screen_position(placement,'b','white','KQkq')
+        self.assertEqual(state.board.board_fen(),placement)
+        self.assertEqual(state.mode,'tela confirmada')
+        self.assertEqual(state.board.castling_xfen(),'KQkq')
+        state.set_fen(chess.STARTING_FEN)
+        after=chess.Board();after.push_san('e4')
+        state.confirm_screen_position(after.board_fen(),'b','white','-')
+        self.assertEqual(state.board.fen(),after.fen())
+
     def test_calibration_does_not_mislabel_empty_starting_pawn_squares(self):
         board=chess.Board()
         board.push_san('c4')

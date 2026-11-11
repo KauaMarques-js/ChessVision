@@ -1,7 +1,9 @@
 """Local, calibrated 2D board recognition. Never sends images or plays moves."""
 from __future__ import annotations
 
-from PIL import Image, ImageChops, ImageStat
+import base64
+import json
+from PIL import Image, ImageChops, ImageStat, ImageDraw
 import chess
 
 
@@ -45,13 +47,19 @@ def _grid_spans(colors):
     return spans
 
 
-def detect_boards(image):
+def detect_boards(image, excluded_regions=()):
     """Return pixel rectangles of visible, flat-color 8x8 checkerboards.
 
     Detection locates geometry, not pieces or the side to move. Ambiguous
     candidates must be reviewed by the user before calibration.
     """
     image = image.convert('RGB')
+    if excluded_regions:
+        image=image.copy()
+        draw=ImageDraw.Draw(image)
+        for left,top,right,bottom in excluded_regions:
+            if right>left and bottom>top:
+                draw.rectangle((left,top,right-1,bottom-1),fill='#111723')
     w, h = image.size
     if min(w, h) < 160:
         return []
@@ -119,8 +127,8 @@ def feature(tile):
 class ScreenBoardReader:
     """Templates come from the user's initial board, with all twelve pieces.
 
-    Calibration is session-only. A changed theme, zoom or region requires a
-    fresh calibration. Ambiguous squares reject the entire snapshot.
+    Saved feature references can be reused on a mid-game board. A different
+    theme still requires calibration. Ambiguous squares reject the snapshot.
     """
     def __init__(self, image, orientation='white'):
         if orientation not in ('white', 'black'):
@@ -157,6 +165,51 @@ class ScreenBoardReader:
         w, h = image.size
         return feature(image.crop((round(col*w/8), round(row*h/8),
                                    round((col+1)*w/8), round((row+1)*h/8))))
+
+    def for_region(self,size,orientation=None):
+        if min(size)<160 or abs(size[0]-size[1])>4:
+            raise ValueError('Região inválida para o tabuleiro.')
+        orientation=orientation or self.orientation
+        if orientation not in ('white','black'):raise ValueError('Orientação inválida')
+        reader=object.__new__(type(self))
+        reader.orientation=orientation
+        reader.size=tuple(size)
+        reader.templates=self.templates
+        return reader
+
+    def save(self,path):
+        # Only normalized piece features: never full desktop screenshots.
+        data={'format':'split-contrast-v1','size':self.size,'orientation':self.orientation,
+              'templates':{symbol:[base64.b64encode(tile.tobytes()).decode('ascii') for tile in tiles]
+                           for symbol,tiles in self.templates.items()}}
+        temporary=path.with_suffix('.tmp')
+        temporary.write_text(json.dumps(data),encoding='utf-8')
+        temporary.replace(path)
+
+    @classmethod
+    def load(cls,path):
+        if path.stat().st_size>1000000:raise ValueError('Referências salvas inválidas')
+        data=json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(data,dict):raise ValueError('Referências salvas inválidas')
+        if data.get('format')!='split-contrast-v1':raise ValueError('Referências de outra versão')
+        templates=data.get('templates')
+        if not isinstance(templates,dict) or set(templates)!=set('.KQRBNPkqrbnp'):
+            raise ValueError('Referências de peças incompletas')
+        decoded={}
+        for symbol,tiles in templates.items():
+            if not isinstance(tiles,list) or not 1<=len(tiles)<=64:raise ValueError('Referências inválidas')
+            decoded[symbol]=[]
+            for tile in tiles:
+                raw=base64.b64decode(tile,validate=True)
+                if len(raw)!=26*26*3:raise ValueError('Referência de peça inválida')
+                decoded[symbol].append(Image.frombytes('RGB',(26,26),raw))
+        reader=object.__new__(cls)
+        reader.templates=decoded
+        reader.orientation=data.get('orientation')
+        reader.size=tuple(data.get('size',()))
+        if len(reader.size)!=2 or not all(isinstance(v,int) for v in reader.size):
+            raise ValueError('Tamanho das referências inválido')
+        return reader.for_region(reader.size)
 
     @staticmethod
     def _distance(a, b):

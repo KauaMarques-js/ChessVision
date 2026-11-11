@@ -27,8 +27,12 @@ Fonte adicional: `ImageGrab` captura uma região do monitor principal a cada 0,7
 Duas leituras iguais passam ao mesmo `AnalysisState.receive` / `BoardTracker`.
 Enquanto a tela está ativa, a extensão é ignorada. Leitura incerta invalida a
 revisão, limpa as sugestões e suspende o motor até uma leitura estável.
-As imagens e amostras ficam somente em memória; não há automação de lances.
-Tema, zoom, orientação e região precisam permanecer iguais à calibração.
+Capturas completas ficam somente em memória. Referências normalizadas de
+peças são persistidas em `.reader_templates.json`, com formato versionado,
+validação de tamanho e atualização atômica. O arquivo é local e excluído do Git
+e do payload Go por ser oculto. Não há automação de lances.
+Um tema desconhecido exige calibração; regiões de outro tamanho/orientação
+podem reutilizar referências reconhecíveis via `for_region`.
 
 Recuperação: leitura incerta mantém a thread ativa e preserva a calibração.
 Snapshots sem transição legal não substituem o histórico confiável da captura;
@@ -49,7 +53,18 @@ valida os cantos das 64 casas e retorna limites em pixels da imagem original.
 A busca roda fora da thread Tk; uma geração invalida resultados após Parar.
 Ambos os modos abrem uma prévia com grade, ajuste numérico dos limites e início
 explícito da leitura. Várias regiões podem ser percorridas antes da calibração.
-Sem grade completa, o automático informa a falha e sugere o modo Manual.
+Sem grade completa, o automático continua aguardando em uma thread com espera
+interruptível. Duas observações iguais publicam `search_ready`; uma geração
+invalida resultados de buscas canceladas. As áreas do próprio programa são
+excluídas da imagem de detecção. A janela é minimizada durante a procura.
+
+Retomada: referências salvas permitem classificar as peças sem reaprender a
+posição inicial. A confirmação mostra imagem e tabuleiro reconhecido. O método
+`confirm_screen_position` preserva histórico legal compatível ou exige turno e
+roques explícitos para uma posição reconstruída. Pesquisa do motor fica suspensa
+até a confirmação; candidatos da busca nunca alimentam o tracker diretamente.
+Falhas persistentes, inclusive posições legíveis mas fora do histórico, emitem
+`relocalize` e reiniciam a busca quando a recuperação automática está habilitada.
 
 Evolução solicitada: cinco opções manuais no modo F11, ranking preservado até
 nova escolha, sem depender da qualidade do último lance. O motor solicita

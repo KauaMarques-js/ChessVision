@@ -48,8 +48,9 @@ def find_stockfish():
 def load_config():
     defaults = {'stockfish':find_stockfish(), 'depth':42, 'seconds':0,
                 'threads':2, 'hash':128, 'multipv':5, 'always_on_top':False,
-                'display_mode':'first', 'board_only':False, 'capture_mode':'manual',
-                'human_enabled':False, 'human_skill':12}
+                'display_mode':'first', 'board_only':False, 'capture_mode':'automatic',
+                'human_enabled':False, 'human_skill':12, 'auto_recover':True,
+                'auto_start_search':True}
     try:
         data = json.loads(CONFIG.read_text(encoding='utf-8'))
         return {**defaults, **{k:v for k,v in data.items() if k in defaults}}
@@ -191,6 +192,44 @@ class AnalysisState:
                 self.revision += 1
                 self.wakeup.set()
                 self.ui_events.put(('board', b.copy(), self.mode, self.warning))
+
+    def preview_screen_position(self,placement):
+        with self.lock:
+            candidate=BoardTracker()
+            if self.tracker.board is not None:
+                candidate.board=self.tracker.board.copy(stack=True)
+                candidate.mode,candidate.warning=self.tracker.mode,self.tracker.warning
+            return candidate.update(placement)
+
+    def confirm_screen_position(self,placement,turn,orientation,castling='-'):
+        snapshot=self.preview_screen_position(placement)
+        board=snapshot.board
+        if snapshot.mode=='estimado':
+            if turn not in ('w','b'):raise ValueError('Confirme de quem é a vez.')
+            if castling!='-' and (not castling or any(c not in 'KQkq' for c in castling) or len(set(castling))!=len(castling)):
+                raise ValueError('Direitos de roque inválidos.')
+            board=chess.Board(f'{placement} {turn} {castling} - 0 1')
+            if not board.is_valid():raise ValueError('A vez ou os direitos de roque não combinam com as peças lidas.')
+            mode='tela confirmada'
+            warning='Posição confirmada sem histórico completo; roques conforme confirmação, en passant e repetições não recuperados.'
+        else:mode,warning=snapshot.mode,snapshot.warning
+        with self.lock:
+            self.tracker=BoardTracker()
+            self.tracker.board=board.copy(stack=True)
+            self.tracker.mode,self.tracker.warning=mode,warning
+            self.board=board
+            self.mode,self.warning=mode,warning
+            self.orientation=orientation
+            self.source='Captura de tela'
+            self.connected_at=time.monotonic()
+            self.last_payload=time.time()
+            self.pending_screen=None
+            self.screen_active=True
+            self.screen_paused=False
+            self.revision+=1
+            self.wakeup.set()
+            self.ui_events.put(('board',board.copy(stack=True),mode,warning))
+            self.ui_events.put(('connection',self.source,orientation))
 
 
 class LocalHandler(BaseHTTPRequestHandler):
@@ -430,9 +469,19 @@ class ChessVisionUI:
         self.screen_bbox = None
         self.screen_dialog = None
         self.poll_job = None
+        self.search_stop = threading.Event()
+        self.search_active = False
+        self.search_exclusions = []
+        self.auto_search_job = None
         self.normal_geometry = '880x550'
         self.normal_minsize = (850, 530)
         self.config = state.config
+        from screen_reader import ScreenBoardReader
+        try:
+            self.screen_reader=ScreenBoardReader.load(CONFIG.with_name('.reader_templates.json'))
+            self.reader_cache_message='Referências salvas disponíveis para retomar no meio da partida.'
+        except (OSError,ValueError,TypeError,KeyError):
+            self.reader_cache_message='Primeiro uso deste tema: calibre uma vez na posição inicial.'
         root.title('ChessVision Lab • Stockfish 19')
         root.geometry(self.normal_geometry)
         root.minsize(*self.normal_minsize)
@@ -516,9 +565,9 @@ class ChessVisionUI:
         self.display_combo.bind('<<ComboboxSelected>>',self.on_display_selected)
         ttk.Button(display,text='Recalcular',command=self.reanalyse).pack(side='left',padx=(4,0))
         ttk.Label(self.reading_tab,text='Captura do tabuleiro',font=('Segoe UI',10,'bold')).pack(anchor='w')
-        ttk.Label(self.reading_tab,text='Comece na posição inicial. A captura continua tentando quando algo passa na frente.',
+        ttk.Label(self.reading_tab,text='Automático: procura o jogo em segundo plano e pede sua confirmação antes de analisar.',
                   style='Hint.TLabel',wraplength=350).pack(anchor='w',pady=(3,8))
-        self.screen_orientation=StringVar(value='Brancas embaixo')
+        self.screen_orientation=StringVar(value='Pretas embaixo' if self.screen_reader and self.screen_reader.orientation=='black' else 'Brancas embaixo')
         ttk.Combobox(self.reading_tab,textvariable=self.screen_orientation,state='readonly',width=22,
                      values=['Brancas embaixo','Pretas embaixo']).pack(anchor='w',pady=2)
         self.capture_mode=StringVar(value='Automático' if self.config.get('capture_mode')=='automatic' else 'Manual')
@@ -527,9 +576,17 @@ class ChessVisionUI:
         capture_combo.pack(anchor='w',pady=2)
         capture_combo.bind('<<ComboboxSelected>>',lambda _:self.state.update_view_settings(
             capture_mode='automatic' if self.capture_mode.get()=='Automático' else 'manual'))
+        self.auto_recover=BooleanVar(value=self.config.get('auto_recover',True))
+        self.auto_start_search=BooleanVar(value=self.config.get('auto_start_search',True))
+        ttk.Checkbutton(self.reading_tab,text='Reencontrar ao perder a área',variable=self.auto_recover,
+            command=lambda:self.state.update_view_settings(auto_recover=self.auto_recover.get())).pack(anchor='w',pady=2)
+        ttk.Checkbutton(self.reading_tab,text='Procurar jogo ao abrir o programa',variable=self.auto_start_search,
+            command=lambda:self.state.update_view_settings(auto_start_search=self.auto_start_search.get())).pack(anchor='w')
+        self.cache_status=StringVar(value=self.reader_cache_message)
+        ttk.Label(self.reading_tab,textvariable=self.cache_status,style='Hint.TLabel',wraplength=350).pack(anchor='w',pady=3)
         actions=ttk.Frame(self.reading_tab)
         actions.pack(fill='x',pady=8)
-        ttk.Button(actions,text='Selecionar área',command=self.select_screen_board).pack(side='left')
+        ttk.Button(actions,text='Iniciar',command=self.select_screen_board).pack(side='left')
         ttk.Button(actions,text='Tentar novamente',command=self.retry_screen).pack(side='left',padx=4)
         ttk.Button(actions,text='Parar',command=self.stop_screen).pack(side='left')
         self.screen_status=StringVar(value='Captura não iniciada.')
@@ -590,6 +647,7 @@ class ChessVisionUI:
         self.compact_menu=tk.Menu(root,tearoff=False)
         self.compact_menu.add_command(label='Painel (F11)',command=lambda:self.set_board_only(False))
         self.compact_menu.add_command(label='Nova área de leitura',command=self.select_screen_board)
+        self.compact_menu.add_command(label='Buscar jogo em segundo plano',command=self.begin_background_search)
         self.compact_menu.add_command(label='Tentar leitura novamente',command=self.retry_screen)
         self.compact_menu.add_command(label='Parar leitura',command=self.stop_screen)
         self.compact_menu.add_command(label='Copiar FEN',command=self.copy_fen)
@@ -604,12 +662,14 @@ class ChessVisionUI:
         self.root.bind('<F11>',lambda _:self.set_board_only(not self.board_only))
         self.root.bind('<Escape>',lambda _:self.set_board_only(False) if self.board_only else None)
         self.root.bind('<KeyPress>',self.on_compact_key)
-        self.root.bind('<Destroy>',lambda event:self.cancel_poll() if event.widget==self.root else None,add='+')
+        self.root.bind('<Destroy>',lambda event:self.destroy_jobs() if event.widget==self.root else None,add='+')
         self.root.attributes('-topmost',self.ontop.get())
         if self.config.get('board_only'):
             self.set_board_only(True,remember=False)
         self.draw_board()
         self.poll()
+        if self.screen_reader is not None and self.config.get('auto_start_search',True):
+            self.auto_search_job=self.root.after(400,self.begin_background_search)
 
     def set_text(self, text):
         self.moves_text.configure(state='normal')
@@ -704,6 +764,11 @@ class ChessVisionUI:
 
     def poll(self):
         self.cancel_poll()
+        self.search_exclusions=[]
+        for window in (self.root,self.screen_dialog):
+            if window is not None and window.winfo_exists() and window.state() not in ('withdrawn','iconic'):
+                x,y=window.winfo_rootx(),window.winfo_rooty()
+                self.search_exclusions.append((x,y,x+window.winfo_width(),y+window.winfo_height()))
         for _ in range(80):
             try: event=self.state.ui_events.get_nowait()
             except queue.Empty:break
@@ -723,6 +788,20 @@ class ChessVisionUI:
                 self.sourcevar.set('Origem: '+event[1])
                 self.draw_board()
             elif what=='screen_status':self.screen_status.set(event[1])
+            elif what=='search_status':
+                if event[1]==self.capture_generation and self.search_active:self.screen_status.set(event[2])
+            elif what=='search_ready':
+                _,generation,screenshot,candidates=event
+                if generation!=self.capture_generation:continue
+                self.search_active=False
+                self.locating_screen=False
+                self.set_board_only(True)
+                self.root.deiconify()
+                self.screen_status.set('Jogo encontrado. Confira as peças e confirme para retomar.')
+                self.review_screen_board(screenshot,candidates)
+            elif what=='relocalize':
+                if event[1]==self.capture_generation and not self.search_active:
+                    self.begin_background_search()
             elif what=='detected_boards':
                 _,generation,screenshot,candidates,error=event
                 if generation!=self.capture_generation:continue
@@ -773,13 +852,28 @@ class ChessVisionUI:
             except tk.TclError:pass
             self.poll_job=None
 
+    def destroy_jobs(self):
+        self.cancel_poll()
+        self.search_stop.set()
+        self.screen_stop.set()
+        if self.auto_search_job is not None:
+            try:self.root.after_cancel(self.auto_search_job)
+            except tk.TclError:pass
+            self.auto_search_job=None
+
     def choose_stockfish(self):
         path=filedialog.askopenfilename(title='Selecione stockfish.exe',filetypes=[('Executáveis','*.exe'),('Todos','*.*')])
         if path:self.pathvar.set(path)
 
     def stop_screen(self):
+        if self.auto_search_job is not None:
+            try:self.root.after_cancel(self.auto_search_job)
+            except tk.TclError:pass
+            self.auto_search_job=None
         self.capture_generation += 1
         self.locating_screen = False
+        self.search_active=False
+        self.search_stop.set()
         self.screen_stop.set()
         with self.state.lock:
             self.state.screen_active = False
@@ -799,6 +893,9 @@ class ChessVisionUI:
         self.screen_status.set('Último FEN reconhecido copiado.')
 
     def retry_screen(self):
+        if self.capture_mode.get()=='Automático':
+            self.begin_background_search()
+            return
         if self.screen_thread and self.screen_thread.is_alive():
             self.stop_screen()
             self.root.after(100,self.retry_screen)
@@ -863,12 +960,70 @@ class ChessVisionUI:
             messagebox.showerror('Captura', 'Instale as dependências de requirements.txt (Pillow).')
             return
         if self.locating_screen:return
+        if self.capture_mode.get()=='Automático':
+            self.begin_background_search()
+            return
         if self.screen_thread and self.screen_thread.is_alive():
             self.stop_screen()
             self.root.after(100, self.select_screen_board)
             return
         self.stop_screen()
         self.fresh_screen(self.select_from_image)
+
+    def begin_background_search(self):
+        self.auto_search_job=None
+        self.stop_screen()
+        self.capture_mode.set('Automático')
+        self.state.update_view_settings(capture_mode='automatic')
+        self.search_stop=threading.Event()
+        self.search_active=True
+        self.locating_screen=True
+        with self.state.lock:self.state.screen_active=True
+        self.state.pause_screen('Procurando o jogo; aguardando confirmação antes de analisar.')
+        self.screen_status.set('Procurando tabuleiro em segundo plano… Abra a janela do jogo.')
+        self.root.title('ChessVision Lab • Procurando jogo em segundo plano')
+        self.root.iconify()
+        self.search_exclusions=[]
+        threading.Thread(target=self.search_game,args=(self.capture_generation,self.search_stop),daemon=True).start()
+
+    def search_game(self,generation,stop):
+        from PIL import ImageGrab
+        from screen_reader import detect_boards
+        previous=None
+        last_status=None
+        while not stop.is_set() and not self.state.shutdown.is_set():
+            try:
+                photo=ImageGrab.grab()
+                candidates=detect_boards(photo,tuple(self.search_exclusions))
+                verified=[]
+                for bbox in candidates:
+                    placement=None
+                    if self.screen_reader is not None:
+                        try:
+                            reader=self.screen_reader.for_region((bbox[2]-bbox[0],bbox[3]-bbox[1]))
+                            placement=reader.read(photo.crop(bbox))
+                        except ValueError:
+                            try:
+                                from screen_reader import ScreenBoardReader
+                                initial=ScreenBoardReader(photo.crop(bbox),self.screen_reader.orientation)
+                                placement=initial.read(photo.crop(bbox))
+                            except ValueError:continue
+                    verified.append((bbox,placement))
+                signature=tuple(verified)
+                if signature and signature==previous:
+                    if not stop.is_set():
+                        stop.set()
+                        self.state.ui_events.put(('search_ready',generation,photo,[item[0] for item in verified]))
+                    return
+                previous=signature or None
+                status='Tabuleiro candidato encontrado; aguardando imagem estável…' if verified else 'Procurando jogo em segundo plano; mantenha o tabuleiro visível.'
+            except (OSError,ValueError) as exc:
+                previous=None
+                status=f'Busca continua aguardando uma imagem legível: {exc}'
+            if status!=last_status and not stop.is_set():
+                self.state.ui_events.put(('search_status',generation,status))
+                last_status=status
+            stop.wait(1.2)
 
     def select_from_image(self,screenshot):
         from PIL import ImageTk
@@ -926,6 +1081,8 @@ class ChessVisionUI:
 
     def review_screen_board(self, screenshot, candidates):
         from PIL import ImageTk
+        with self.state.lock:self.state.screen_active=True
+        self.state.pause_screen('Confira as peças lidas; assistência aguardando sua confirmação.')
         dialog=tk.Toplevel(self.root)
         self.screen_dialog=dialog
         photo_source=[screenshot]
@@ -934,8 +1091,8 @@ class ChessVisionUI:
         dialog.transient(self.root)
         frame=ttk.Frame(dialog,padding=8)
         frame.pack(fill='both',expand=True)
-        ttk.Label(frame,text='Confira se a grade coincide com as 64 casas.').pack(anchor='w')
-        ttk.Label(frame,text='Ajuste os limites em pixels. Calibre na posição inicial.',style='Hint.TLabel').pack(anchor='w')
+        ttk.Label(frame,text='Confira a imagem e as peças lidas antes de confirmar.').pack(anchor='w')
+        ttk.Label(frame,text='Tema conhecido permite retomar no meio da partida.',style='Hint.TLabel').pack(anchor='w')
         candidate_label=ttk.Label(frame)
         candidate_label.pack(anchor='w',pady=4)
         controls=ttk.Frame(frame)
@@ -946,12 +1103,87 @@ class ChessVisionUI:
             ttk.Label(controls,text=label).grid(row=0,column=column*2,padx=(5,2))
             tk.Spinbox(controls,from_=0,to=max(screenshot.size),textvariable=var,width=5,
                        command=lambda:update_preview()).grid(row=0,column=column*2+1)
-        preview=Canvas(frame,width=280,height=280,bg='#111723',highlightthickness=0)
+        views=ttk.Notebook(frame)
+        views.pack(pady=4)
+        preview=Canvas(views,width=280,height=280,bg='#111723',highlightthickness=0)
         self.screen_preview=preview
-        preview.pack(pady=6)
+        pieces=Canvas(views,width=280,height=280,bg='#111723',highlightthickness=0)
+        self.recognized_preview=pieces
+        views.add(preview,text='Imagem do jogo')
+        views.add(pieces,text='Peças lidas')
+        confirmrow=ttk.Frame(frame)
+        confirmrow.pack(fill='x',pady=3)
+        preview_orientation=StringVar(value=self.screen_orientation.get())
+        orientation_combo=ttk.Combobox(confirmrow,textvariable=preview_orientation,state='readonly',width=17,
+            values=['Brancas embaixo','Pretas embaixo'])
+        orientation_combo.pack(side='left')
+        turn_choice=StringVar(value='Confirme a vez')
+        self.confirm_turn_var=turn_choice
+        turn_combo=ttk.Combobox(confirmrow,textvariable=turn_choice,state='readonly',width=14,
+                               values=['Brancas jogam','Pretas jogam'])
+        turn_combo.pack(side='left',padx=4)
+        rightsrow=ttk.Frame(frame)
+        rightsrow.pack(fill='x',pady=2)
+        ttk.Label(rightsrow,text='Roques:').pack(side='left')
+        rights={key:BooleanVar(value=False) for key in 'KQkq'}
+        self.confirm_castling_vars=rights
+        rights_buttons=[]
+        for key in rights:
+            button=ttk.Checkbutton(rightsrow,text=key,variable=rights[key])
+            button.pack(side='left')
+            rights_buttons.append(button)
+        ttk.Label(frame,text='K/Q: roques das brancas; k/q: das pretas. Sem histórico, confirme os permitidos.',
+                  style='Hint.TLabel',wraplength=390).pack(anchor='w')
         warning=StringVar()
-        ttk.Label(frame,textvariable=warning,wraplength=500).pack(anchor='w')
+        ttk.Label(frame,textvariable=warning,wraplength=390).pack(anchor='w')
         current=[0]
+        recognized={'reader':None,'placement':None,'orientation':None}
+
+        def recognize(crop):
+            from screen_reader import ScreenBoardReader
+            orientation='black' if preview_orientation.get()=='Pretas embaixo' else 'white'
+            reader=None
+            error=None
+            if self.screen_reader is not None:
+                try:
+                    reader=self.screen_reader.for_region(crop.size,orientation)
+                    placement=reader.read(crop)
+                except ValueError as exc:reader=None;error=exc
+            if reader is None:
+                try:
+                    reader=ScreenBoardReader(crop,orientation)
+                    placement=reader.read(crop)
+                except ValueError as exc:
+                    recognized['reader']=None
+                    pieces.delete('all')
+                    warning.set('Não identifiquei as peças. Em tema novo, calibre na posição inicial. '+str(error or exc))
+                    return
+            snapshot=self.state.preview_screen_position(placement)
+            changed=placement!=recognized['placement'] or orientation!=recognized['orientation']
+            first=recognized['placement'] is None
+            recognized.update(reader=reader,placement=placement,orientation=orientation)
+            if first:views.select(pieces)
+            known=snapshot.mode!='estimado'
+            turn_combo.configure(state='disabled' if known else 'readonly')
+            for button in rights_buttons:button.configure(state='disabled' if known else 'normal')
+            if known:
+                turn_choice.set('Brancas jogam' if snapshot.board.turn else 'Pretas jogam')
+                for key,var in rights.items():var.set(key in snapshot.board.castling_xfen())
+            elif changed:
+                turn_choice.set('Confirme a vez')
+                for var in rights.values():var.set(False)
+            pieces.delete('all')
+            for row in range(8):
+                for col in range(8):
+                    square=chess.square(7-col if orientation=='black' else col,row if orientation=='black' else 7-row)
+                    pieces.create_rectangle(col*35,row*35,(col+1)*35,(row+1)*35,
+                        fill='#e8d7ba' if (chess.square_file(square)+chess.square_rank(square))%2 else '#8098ad',outline='')
+                    piece=snapshot.board.piece_at(square)
+                    if piece:pieces.create_text(col*35+17.5,row*35+17.5,text=PIECE_GLYPHS[piece.symbol()],
+                        fill='#ffffff' if piece.color else '#111723',font=('Segoe UI Symbol',25))
+                    if row==7:pieces.create_text(col*35+3,278,anchor='sw',text=chess.FILE_NAMES[chess.square_file(square)],fill='#293244',font=('Segoe UI',7))
+                    if col==0:pieces.create_text(2,row*35+2,anchor='nw',text=str(chess.square_rank(square)+1),fill='#293244',font=('Segoe UI',7))
+            warning.set('Peças identificadas. Confira a aba Peças lidas.'+(' Confirme a vez e os roques; o histórico anterior não está disponível.' if not known else ' Histórico compatível.'))
 
         def update_preview():
             preview.delete('all')
@@ -975,6 +1207,7 @@ class ChessVisionUI:
                     preview.create_line(0,py,crop.width,py,fill='#00d9a3')
                 warning.set(f'Região: ({x}, {y}) até ({x+w}, {y+h}) • {w} × {h} px')
                 self.screen_bbox=(x,y,x+w,y+h)
+                recognize(screenshot.crop((x,y,x+w,y+h)))
                 return x,y,x+w,y+h
             except (ValueError,tk.TclError) as exc:
                 warning.set(str(exc))
@@ -988,20 +1221,27 @@ class ChessVisionUI:
             update_preview()
 
         def start():
-            from screen_reader import ScreenBoardReader
             bbox=update_preview()
             if bbox is None:return
-            orientation='black' if self.screen_orientation.get()=='Pretas embaixo' else 'white'
-            try:
-                reader=ScreenBoardReader(photo_source[0].crop(bbox),orientation)
-                if reader.read(photo_source[0].crop(bbox)) != chess.STARTING_BOARD_FEN:
-                    raise ValueError('A calibração precisa começar na posição inicial.')
-            except ValueError as exc:
-                warning.set(str(exc))
+            if recognized['reader'] is None:return
+            turn={'Brancas jogam':'w','Pretas jogam':'b'}.get(turn_choice.get())
+            if turn is None:
+                warning.set('Confirme de quem é a vez antes de continuar.')
                 return
+            castling=''.join(key for key,var in rights.items() if var.get()) or '-'
+            confirmation={'placement':recognized['placement'],'turn':turn,
+                          'orientation':recognized['orientation'],'castling':castling}
+            try:
+                # Validate metadata before dismissing the confirmation UI.
+                probe=self.state.preview_screen_position(confirmation['placement'])
+                if probe.mode=='estimado' and not chess.Board(
+                    f'{confirmation["placement"]} {turn} {castling} - 0 1').is_valid():
+                    raise ValueError('A vez ou os roques não combinam com as peças lidas.')
+            except ValueError as exc:warning.set(str(exc));return
             dialog.destroy()
             self.screen_dialog=None
-            self.start_screen_capture(reader,bbox)
+            self.screen_orientation.set(preview_orientation.get())
+            self.start_screen_capture(recognized['reader'],bbox,confirmation=confirmation)
 
         def recapture():
             warning.set('Recapturando a tela…')
@@ -1018,6 +1258,7 @@ class ChessVisionUI:
 
         def cancel():
             self.screen_dialog=None
+            self.stop_screen()
             self.screen_status.set('Calibração cancelada.')
             dialog.destroy()
 
@@ -1028,7 +1269,8 @@ class ChessVisionUI:
         ttk.Button(buttons,text='Tentar novamente',command=recapture).pack(side='left',padx=2)
         ttk.Button(buttons,text='Nova área',command=new_area).pack(side='left',padx=2)
         ttk.Button(buttons,text='Cancelar',command=cancel).pack(side='right')
-        ttk.Button(buttons,text='Iniciar leitura',command=start).pack(side='right',padx=4)
+        ttk.Button(buttons,text='Confirmar e continuar',command=start).pack(side='right',padx=4)
+        orientation_combo.bind('<<ComboboxSelected>>',lambda _:update_preview())
         dialog.bind('<Return>',lambda _:update_preview())
         dialog.bind('<Escape>',lambda _:cancel())
         dialog.protocol('WM_DELETE_WINDOW',cancel)
@@ -1036,20 +1278,26 @@ class ChessVisionUI:
         dialog.grab_set()
         return dialog
 
-    def start_screen_capture(self, reader, bbox):
+    def start_screen_capture(self, reader, bbox, confirmation=None):
         self.screen_reader=reader
         self.screen_bbox=bbox
         self.screen_stop=threading.Event()
         stop=self.screen_stop
-        with self.state.lock:
-            self.state.screen_active=True
-            self.state.tracker=BoardTracker()
-            self.state.tracker.update(chess.STARTING_BOARD_FEN)
-            self.state.pending_screen=None
-            self.state.board=None
-            self.state.revision+=1
-            self.state.wakeup.set()
-            self.state.ui_events.put(('clear', self.state.revision))
+        if confirmation is not None:self.state.confirm_screen_position(**confirmation)
+        else:
+            with self.state.lock:
+                self.state.screen_active=True
+                self.state.tracker=BoardTracker()
+                self.state.tracker.update(chess.STARTING_BOARD_FEN)
+                self.state.pending_screen=None
+                self.state.board=None
+                self.state.revision+=1
+                self.state.wakeup.set()
+                self.state.ui_events.put(('clear', self.state.revision))
+        try:
+            reader.save(CONFIG.with_name('.reader_templates.json'))
+            self.cache_status.set('Referências salvas. É possível retomar no meio da partida neste tema.')
+        except OSError:self.cache_status.set('Referências disponíveis só nesta sessão; não foi possível salvar.')
         self.screen_status.set('Captura ativa: mantenha o tabuleiro visível.')
         self.dock_capture_window(bbox)
         self.screen_thread=threading.Thread(target=self.read_screen,args=(reader,bbox,stop),daemon=True)
@@ -1059,6 +1307,8 @@ class ChessVisionUI:
         from PIL import ImageGrab
         previous=None
         last_status=None
+        failures=0
+        generation=getattr(self,'capture_generation',0)
         while not stop.is_set() and not self.state.shutdown.is_set():
             try:
                 placement=reader.read(ImageGrab.grab(bbox=bbox))
@@ -1070,14 +1320,19 @@ class ChessVisionUI:
                             'source':'Captura de tela','orientation':reader.orientation})
                         if not accepted['ok']:raise ValueError(accepted['error'])
                     status='Captura ativa • posição reconhecida'
+                    failures=0
                 else:
                     status='Aguardando posição estável; a leitura continua…'
                     self.state.pause_screen(status)
                 previous=placement
             except (ValueError,OSError) as exc:
+                failures+=1
                 previous=None
                 status=f'Aguardando imagem legível; tentando novamente: {exc}'
                 self.state.pause_screen(status)
+                if failures>=4 and self.state.config.get('auto_recover',True) and not stop.is_set():
+                    self.state.ui_events.put(('relocalize',generation))
+                    return
             if status!=last_status and not stop.is_set():
                 self.state.ui_events.put(('screen_status',status))
                 last_status=status

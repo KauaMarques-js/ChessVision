@@ -14,6 +14,77 @@ from test_screen_reader import render
 
 
 class InterfaceViewTests(unittest.TestCase):
+    def test_reopening_loads_saved_theme_and_starts_cancellable_background_search(self):
+        from screen_reader import ScreenBoardReader
+        root=Tk()
+        try:
+            with tempfile.TemporaryDirectory() as temp,patch.object(app,'CONFIG',Path(temp)/'config.json'):
+                ScreenBoardReader(render(chess.Board())).save(Path(temp)/'.reader_templates.json')
+                with patch.object(app.threading,'Thread') as thread:
+                    ui=app.ChessVisionUI(root,app.AnalysisState())
+                    self.assertIsNotNone(ui.screen_reader)
+                    self.assertIsNone(ui.state.board)
+                    deadline=time.monotonic()+2
+                    while not ui.search_active and time.monotonic()<deadline:
+                        root.update()
+                        time.sleep(.02)
+                    self.assertTrue(ui.search_active)
+                    self.assertEqual(thread.call_args.kwargs['target'],ui.search_game)
+                    old_generation=ui.capture_generation
+                    ui.stop_screen()
+                    self.assertTrue(ui.search_stop.is_set())
+                    with patch.object(ui,'review_screen_board') as review:
+                        ui.state.ui_events.put(('search_ready',old_generation,render(chess.Board()),[(0,0,480,480)]))
+                        ui.poll()
+                        review.assert_not_called()
+        finally:root.destroy()
+
+    def test_midgame_review_waits_for_confirmation_then_restores_assistance(self):
+        from screen_reader import ScreenBoardReader
+        root=Tk()
+        try:
+            with tempfile.TemporaryDirectory() as temp,patch.object(app,'CONFIG',Path(temp)/'config.json'):
+                ui=app.ChessVisionUI(root,app.AnalysisState())
+                ui.screen_reader=ScreenBoardReader(render(chess.Board()))
+                board=chess.Board()
+                for move in ('e4','e5','Nf3'):board.push_san(move)
+                photo=Image.new('RGB',(700,600),'#202433')
+                photo.paste(render(board),(17,23))
+                with patch('PIL.ImageGrab.grab',return_value=photo):
+                    ui.begin_background_search()
+                    deadline=time.monotonic()+10
+                    while ui.search_active and time.monotonic()<deadline:
+                        root.update()
+                        time.sleep(.02)
+                self.assertFalse(ui.search_active)
+                dialog=ui.screen_dialog
+                self.assertIsNotNone(dialog)
+                self.assertIsNone(ui.state.board)
+                self.assertIsNone(ui.best_uci)
+                self.assertEqual(ui.confirm_turn_var.get(),'Confirme a vez')
+                def find(widget):
+                    for child in widget.winfo_children():
+                        if child.winfo_class()=='TButton' and child.cget('text')=='Confirmar e continuar':return child
+                        result=find(child)
+                        if result:return result
+                button=find(dialog)
+                button.invoke()
+                self.assertTrue(dialog.winfo_exists())
+                self.assertIsNone(ui.state.board)
+                ui.confirm_turn_var.set('Pretas jogam')
+                for var in ui.confirm_castling_vars.values():var.set(True)
+                with patch.object(app.threading,'Thread'),patch.object(ui,'dock_capture_window'):
+                    button.invoke()
+                self.assertEqual(ui.state.board.board_fen(),board.board_fen())
+                self.assertEqual(ui.state.board.turn,chess.BLACK)
+                self.assertEqual(ui.state.mode,'tela confirmada')
+                self.assertFalse(ui.state.screen_paused)
+                cached=ScreenBoardReader.load(Path(temp)/'.reader_templates.json')
+                self.assertEqual(cached.read(render(board)),board.board_fen())
+                ui.poll()
+                self.assertEqual(ui.board.board_fen(),board.board_fen())
+        finally:root.destroy()
+
     def test_retry_recaptures_uncovered_screen_and_compact_layout_keeps_board_size(self):
         root=Tk()
         try:
@@ -35,7 +106,7 @@ class InterfaceViewTests(unittest.TestCase):
                     dialog=ui.review_screen_board(bad,[(17,23,497,503)])
                     root.update()
                     self.assertLessEqual(ui.screen_preview.winfo_width(),280)
-                    find(dialog,'Iniciar leitura').invoke()
+                    find(dialog,'Confirmar e continuar').invoke()
                     start.assert_not_called()
                     def grab():
                         self.assertEqual(root.state(),'withdrawn')
@@ -48,7 +119,7 @@ class InterfaceViewTests(unittest.TestCase):
                             root.update()
                             time.sleep(.02)
                         capture.assert_called_once()
-                    find(dialog,'Iniciar leitura').invoke()
+                    find(dialog,'Confirmar e continuar').invoke()
                     self.assertEqual(start.call_args.args[1],(17,23,497,503))
                 ui.set_board_only(True)
                 root.update()
@@ -57,6 +128,7 @@ class InterfaceViewTests(unittest.TestCase):
                 self.assertLessEqual(root.winfo_height(),520)
                 reader=object()
                 ui.screen_reader=reader
+                ui.capture_mode.set('Manual')
                 ui.screen_bbox=(17,23,497,503)
                 ui.state.set_fen(chess.STARTING_FEN)
                 tracker=ui.state.tracker
@@ -92,14 +164,14 @@ class InterfaceViewTests(unittest.TestCase):
                     self.assertEqual([v.get() for v in ui.screen_review_vars], [18,24,480,480])
                     find_button(dialog,'Outra região').invoke()
                     ui.screen_review_vars[2].set(159)
-                    find_button(dialog,'Iniciar leitura').invoke()
+                    find_button(dialog,'Confirmar e continuar').invoke()
                     start.assert_not_called()
                     ui.screen_review_vars[2].set(480)
                     ui.screen_review_vars[0].set(300)
-                    find_button(dialog,'Iniciar leitura').invoke()
+                    find_button(dialog,'Confirmar e continuar').invoke()
                     start.assert_not_called()
                     ui.screen_review_vars[0].set(17)
-                    find_button(dialog,'Iniciar leitura').invoke()
+                    find_button(dialog,'Confirmar e continuar').invoke()
                     self.assertEqual(start.call_args.args[1], (17,23,497,503))
 
                 with patch.object(ui, 'review_screen_board') as review:

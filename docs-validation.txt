@@ -67,3 +67,14 @@ PASSOU: 5 testes Go do backend.
 PASSOU: capturas reais do Canvas Tk reconhecidas na posição inicial e após 6 movimentos legais; revisão visual das três abas, F11 e prévia. Imagens em artifacts/compact-*.png e artifacts/reader-preview-small.png na raiz do workspace.
 PASSOU: build Vite, helper recompilado, hashes conferidos, self-test do helper empacotado e instalador NSIS x64 gerado. Arquivo final em release/ChessVision-Manager-Setup-1.0.0-x64.exe.
 NÃO EXECUTADO: reiniciar a partida pessoal em andamento. A leitura com o tema exato do Lichess deve ser conferida após atualizar e calibrar novamente na posição inicial. Não há garantia de reconhecimento para todo tema.
+
+Atualização 2026-11-11 — retomada no meio da partida e busca em segundo plano
+IMPLEMENTADO: referências normalizadas de peças persistidas localmente em .reader_templates.json, com formato versionado e validação. Arquivo excluído do Git/payload; capturas completas não são gravadas.
+IMPLEMENTADO: busca contínua em thread, exclusão das áreas do ChessVision, duas observações estáveis, cancelamento por geração e espera quando o jogo não está visível. Pode procurar ao abrir quando há referências salvas.
+IMPLEMENTADO: recuperação automática de área perdida ou vários lances não observados. A prévia mostra Imagem do jogo/Peças lidas; nenhuma posição candidata alimenta a análise antes de Confirmar e continuar.
+IMPLEMENTADO: confirmação de vez/roques quando não há histórico compatível; preservação de histórico legal conhecido. Após confirmação, o leitor e a assistência retornam ao compacto.
+PASSOU: 38 testes Python, incluindo persistência/reabertura, adaptação da região, exclusão do próprio tabuleiro, cancelamento, retomada após lances perdidos, fluxo Tk de busca até confirmação e ausência de análise antes da confirmação.
+PASSOU: 5 testes Go do backend, build Vite, helper recompilado, hashes conferidos, self-test do pacote e npm run dist:win.
+PASSOU: revisão visual das telas de leitura e confirmação, em artifacts/background-reading.png e artifacts/midgame-confirmation.png na raiz do workspace; reconhecimento de posição renderizada pelo Canvas Tk no meio da partida.
+LIMITES: tema desconhecido ainda precisa de calibração inicial; referências salvas permitem retomar posições atuais do mesmo tema. O jogo precisa estar visível no monitor principal. A imagem isolada não recupera en passant, contadores ou repetições anteriores; turno e roques desconhecidos exigem confirmação.
+NÃO EXECUTADO: substituir/reiniciar a partida pessoal ativa para testar ao vivo; instalador atualizado disponível para o usuário.
