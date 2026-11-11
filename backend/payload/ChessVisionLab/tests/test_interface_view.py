@@ -14,6 +14,58 @@ from test_screen_reader import render
 
 
 class InterfaceViewTests(unittest.TestCase):
+    def test_retry_recaptures_uncovered_screen_and_compact_layout_keeps_board_size(self):
+        root=Tk()
+        try:
+            with tempfile.TemporaryDirectory() as temp,patch.object(app,'CONFIG',Path(temp)/'config.json'):
+                ui=app.ChessVisionUI(root,app.AnalysisState())
+                root.update()
+                self.assertLessEqual(root.winfo_width(),900)
+                self.assertLessEqual(root.winfo_height(),560)
+                self.assertEqual(ui.canvas.winfo_width(),440)
+                bad=Image.new('RGB',(700,600),'#888888')
+                good=bad.copy()
+                good.paste(render(chess.Board()),(17,23))
+                def find(widget,text):
+                    for child in widget.winfo_children():
+                        if child.winfo_class()=='TButton' and child.cget('text')==text:return child
+                        found=find(child,text)
+                        if found:return found
+                with patch.object(ui,'start_screen_capture') as start:
+                    dialog=ui.review_screen_board(bad,[(17,23,497,503)])
+                    root.update()
+                    self.assertLessEqual(ui.screen_preview.winfo_width(),280)
+                    find(dialog,'Iniciar leitura').invoke()
+                    start.assert_not_called()
+                    def grab():
+                        self.assertEqual(root.state(),'withdrawn')
+                        self.assertEqual(dialog.state(),'withdrawn')
+                        return good
+                    with patch('PIL.ImageGrab.grab',side_effect=grab) as capture:
+                        find(dialog,'Tentar novamente').invoke()
+                        deadline=time.monotonic()+2
+                        while not capture.called and time.monotonic()<deadline:
+                            root.update()
+                            time.sleep(.02)
+                        capture.assert_called_once()
+                    find(dialog,'Iniciar leitura').invoke()
+                    self.assertEqual(start.call_args.args[1],(17,23,497,503))
+                ui.set_board_only(True)
+                root.update()
+                self.assertEqual(root.winfo_width(),440)
+                self.assertEqual(ui.compact_canvas.winfo_width(),440)
+                self.assertLessEqual(root.winfo_height(),520)
+                reader=object()
+                ui.screen_reader=reader
+                ui.screen_bbox=(17,23,497,503)
+                ui.state.set_fen(chess.STARTING_FEN)
+                tracker=ui.state.tracker
+                with patch.object(ui,'dock_capture_window'),patch.object(app.threading,'Thread') as thread:
+                    ui.retry_screen()
+                    self.assertIs(thread.call_args.kwargs['args'][0],reader)
+                    self.assertIs(ui.state.tracker,tracker)
+        finally:root.destroy()
+
     def test_region_review_validates_pixel_bounds_before_starting(self):
         try:
             root = Tk()

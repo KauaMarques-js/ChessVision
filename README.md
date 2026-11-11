@@ -33,9 +33,10 @@ Requer Windows 10/11 x64 e internet na primeira instalação. O EXE inclui a cen
 - Mostra o estado dos arquivos encontrados e se o servidor local responde em `127.0.0.1:8765`.
 - Abre o analisador sem reinstalar dependências a cada execução.
 - Ao abrir o analisador, atualiza os arquivos embarcados e completa dependências Python ausentes, como Pillow, no ambiente existente. Preserva preferências e motor. Se a atualização falhar, exibe o erro específico no registro.
-- No analisador, **Só tabuleiro (F11)** oferece cinco botões laterais para escolher da 1ª à 5ª melhor opção, com atalhos de 1 a 5 e seleção manual persistente. A opção **Sempre visível** continua no menu do botão direito.
-- **Humanizado (treino)** oferece força reduzida ajustável de 0 a 19, sugestão nativa do motor e cinco prévias para comparação. O atalho **H** ou **Lance humanizado** funciona no F11. Não há garantia de vitória, simulação humana fiel ou evasão de detecção.
-- **Ler tela…** permite identificar o tabuleiro em modo **Manual** ou **Automático**, com prévia da grade e ajuste dos limites em pixels. Acompanha um tabuleiro 2D no monitor principal sem extensão, incluindo outros aplicativos. Exige calibração na posição inicial e mantém as imagens em memória local. Consulte as instruções e limitações em `backend/payload/ChessVisionLab/README.md`.
+- O painel usa abas **Análise / Leitura / Ajustes** em 880×550. O **F11** ocupa 440×510 com seletores pequenos abaixo do tabuleiro, preservado em 440×440. O menu **Mais** reúne ações de leitura e sempre visível.
+- **Humanizado (treino)** oferece força reduzida ajustável de 0 a 19, sugestão nativa do motor e cinco prévias para comparação. O atalho **H** ou **Hum.** funciona no F11. Não há garantia de vitória, simulação humana fiel ou evasão de detecção.
+- A aba **Leitura** permite identificar o tabuleiro em modo **Manual** ou **Automático**, com prévia da grade e ajuste dos limites em pixels. Acompanha um tabuleiro 2D no monitor principal sem extensão, incluindo outros aplicativos. Exige calibração na posição inicial e mantém as imagens em memória local. Consulte as instruções e limitações em `backend/payload/ChessVisionLab/README.md`.
+- Na aba **Leitura**, **Selecionar área** abre uma prévia menor com **Tentar novamente** para recapturar a imagem. Durante obstruções, o leitor continua tentando e retoma com imagens estáveis; mantém a calibração e protege o histórico anterior. O compacto tenta ficar fora da área lida.
 - Executa o diagnóstico do projeto e apresenta saída, falhas e conclusão reais.
 - Repara dependências e Stockfish mediante confirmação na interface.
 - Abre as pastas do programa e da extensão; copia o caminho da extensão.

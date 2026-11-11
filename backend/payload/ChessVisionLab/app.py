@@ -75,6 +75,7 @@ class AnalysisState:
         self.last_payload = None
         self.screen_active = False
         self.screen_paused = False
+        self.pending_screen = None
 
     def change_config(self, config):
         with self.lock:
@@ -113,7 +114,20 @@ class AnalysisState:
         with self.lock:
             if self.screen_active and source != 'Captura de tela':
                 return {'ok': True, 'mode': 'Captura de tela ativa; extensão ignorada'}
-            result = self.tracker.update(placement, moves, turn=turn)
+            tracker=self.tracker
+            if source=='Captura de tela' and tracker.board is not None:
+                candidate=BoardTracker()
+                candidate.board=tracker.board.copy(stack=True)
+                candidate.mode,candidate.warning=tracker.mode,tracker.warning
+                result=candidate.update(placement,moves,turn=turn)
+                if result.mode=='estimado' and tracker.mode!='estimado':
+                    self.pending_screen=placement
+                    warning='Posição ainda incompatível com o histórico. Aguarde; se perdeu vários lances, confirme o turno em Leitura.'
+                    self.pause_screen(warning)
+                    return {'ok':False,'mode':'aguardando leitura','error':warning}
+                self.tracker=candidate
+            else:result=tracker.update(placement,moves,turn=turn)
+            self.pending_screen=None
             self.connected_at = time.monotonic()
             self.source = source
             self.orientation = orientation if orientation in ('white', 'black') else 'white'
@@ -131,8 +145,10 @@ class AnalysisState:
 
     def pause_screen(self, warning):
         with self.lock:
-            if self.screen_paused or not self.screen_active:
+            if not self.screen_active:
                 return
+            self.warning = warning
+            if self.screen_paused:return
             self.screen_paused = True
             self.mode = 'captura pausada'
             self.revision += 1
@@ -146,9 +162,11 @@ class AnalysisState:
             raise ValueError('Posicao FEN invalida')
         with self.lock:
             self.tracker = BoardTracker()
+            self.pending_screen=None
             self.tracker.board = b.copy()
             self.tracker.mode = 'FEN manual'
             self.board = b
+            self.screen_paused=False
             self.mode, self.warning = 'FEN manual', ''
             self.source = 'Entrada manual'
             self.revision += 1
@@ -157,9 +175,17 @@ class AnalysisState:
 
     def force_turn(self, color):
         with self.lock:
-            b = self.tracker.force_turn(color)
+            tracker=self.tracker
+            if self.pending_screen is not None:
+                candidate=BoardTracker()
+                candidate.update(self.pending_screen,turn=color)
+                tracker=candidate
+            b = tracker.force_turn(color)
             if b:
+                self.tracker=tracker
+                self.pending_screen=None
                 self.board = b
+                self.screen_paused=False
                 self.mode = self.tracker.mode
                 self.warning = self.tracker.warning
                 self.revision += 1
@@ -189,9 +215,12 @@ class LocalHandler(BaseHTTPRequestHandler):
                 mode = self.state.mode
                 last_seen = self.state.last_payload
                 ready = self.state.board is not None
+                warning = self.state.warning
+                capture_running = self.state.screen_active
             self._send(200, {'ok':True, 'app':'ChessVision Lab', 'version':'1.1.0',
                              'board_ready':ready, 'mode':mode, 'source':source,
-                             'last_payload':last_seen})
+                             'last_payload':last_seen,'warning':warning,
+                             'capture_running':capture_running})
         else:
             self._send(404, {'error':'not found'})
 
@@ -267,7 +296,7 @@ def engine_worker(state: AnalysisState):
                 state.wakeup.clear()
                 continue
             if state.mode in ('estimado', 'captura pausada'):
-                why = ('Leitura de tela pausada: aguardando uma posição estável.' if state.mode == 'captura pausada'
+                why = ('Leitura ativa; aguardando imagem legível para analisar.' if state.mode == 'captura pausada'
                        else 'Posicao nao confirmada: selecione o turno ou informe um FEN completo.')
                 if why != last_idle:
                     state.ui_events.put(('engine', why))
@@ -383,6 +412,7 @@ def engine_worker(state: AnalysisState):
 
 class ChessVisionUI:
     CELL = 55
+    COMPACT_HEIGHT = 510
     def __init__(self, root, state):
         self.root, self.state = root, state
         self.board = chess.Board()
@@ -396,12 +426,16 @@ class ChessVisionUI:
         self.screen_thread = None
         self.capture_generation = 0
         self.locating_screen = False
-        self.normal_geometry = '1030x730'
-        self.normal_minsize = (850, 630)
+        self.screen_reader = None
+        self.screen_bbox = None
+        self.screen_dialog = None
+        self.poll_job = None
+        self.normal_geometry = '880x550'
+        self.normal_minsize = (850, 530)
         self.config = state.config
         root.title('ChessVision Lab • Stockfish 19')
-        root.geometry('1030x730')
-        root.minsize(850,630)
+        root.geometry(self.normal_geometry)
+        root.minsize(*self.normal_minsize)
         root.configure(bg='#111723')
         root.protocol('WM_DELETE_WINDOW',self.close)
 
@@ -409,157 +443,168 @@ class ChessVisionUI:
         try:style.theme_use('clam')
         except tk.TclError:pass
         style.configure('TFrame',background='#111723')
-        style.configure('TLabel',background='#111723', foreground='#edf2fb', font=('Segoe UI',10))
-        style.configure('H1.TLabel',background='#111723',foreground='#fbfbfc',font=('Segoe UI',19,'bold'))
+        style.configure('TLabel',background='#111723', foreground='#edf2fb', font=('Segoe UI',9))
+        style.configure('H1.TLabel',background='#111723',foreground='#fbfbfc',font=('Segoe UI',14,'bold'))
         style.configure('Hint.TLabel',background='#111723',foreground='#a8b6ca',font=('Segoe UI',9))
-        style.configure('TButton',font=('Segoe UI',10))
+        style.configure('TButton',font=('Segoe UI',9),padding=(5,2))
+        style.configure('TMenubutton',font=('Segoe UI',9),padding=(4,2))
+        style.configure('TNotebook',background='#111723',borderwidth=0)
+        style.configure('TNotebook.Tab',padding=(8,4),font=('Segoe UI',9))
         style.configure('TCheckbutton',background='#111723',foreground='#edf2fb')
         style.configure('TRadiobutton',background='#192233',foreground='#edf2fb',
-                        font=('Segoe UI',10),padding=(6,7))
+                        font=('Segoe UI',9),padding=(4,2))
         style.map('TRadiobutton',background=[('selected','#255b57'),('active','#243448')],
                   foreground=[('selected','#ffffff'),('active','#ffffff')])
 
         self.full_view=ttk.Frame(root)
         self.full_view.pack(fill='both',expand=True)
         header=ttk.Frame(self.full_view)
-        header.pack(fill='x',padx=22,pady=(16,10))
-        ttk.Label(header,text='♞  ChessVision Lab',style='H1.TLabel').pack(side='left')
-        ttk.Label(header,text='ANÁLISE LOCAL • UCI • NNUE',style='Hint.TLabel').pack(side='right')
-        self.status=StringVar(value='Aguardando posição: extensão, tela ou FEN…')
-        ttk.Label(self.full_view,textvariable=self.status).pack(anchor='w',padx=25)
+        header.pack(fill='x',padx=10,pady=(6,2))
+        ttk.Label(header,text='♞ ChessVision Lab',style='H1.TLabel').pack(side='left')
+        ttk.Button(header,text='F11 · compacto',command=lambda:self.set_board_only(True)).pack(side='right')
+        self.status=StringVar(value='Escolha Leitura, extensão ou FEN para começar.')
+        ttk.Label(self.full_view,textvariable=self.status).pack(anchor='w',padx=10)
         content=ttk.Frame(self.full_view)
-        content.pack(fill='both', expand=True,padx=20,pady=12)
+        content.pack(fill='both',expand=True,padx=10,pady=5)
         left=ttk.Frame(content)
         left.pack(side='left',fill='y')
         self.canvas=Canvas(left,width=self.CELL*8,height=self.CELL*8,bg='#242d3c',highlightthickness=0)
         self.canvas.pack()
-        ttk.Label(left,text='O leitor acompanha a posição; nunca executa lances.',style='Hint.TLabel').pack(anchor='w',pady=7)
-        self.fenvar=StringVar(value=chess.STARTING_FEN)
-        fenframe=ttk.Frame(left)
-        fenframe.pack(fill='x',pady=(9,0))
-        ttk.Label(fenframe,text='FEN').pack(side='left')
-        ttk.Entry(fenframe,textvariable=self.fenvar,width=48).pack(side='left',padx=7,fill='x',expand=True)
-        ttk.Button(left,text='Analisar FEN digitado',command=self.manual_fen).pack(anchor='w',pady=7)
-
-        right=ttk.Frame(content)
-        right.pack(side='left',fill='both',expand=True,padx=(20,0))
-        self.enginevar=StringVar(value='Stockfish não iniciado')
+        ttk.Label(left,text='Tabuleiro de análise · 440 × 440',style='Hint.TLabel').pack(anchor='w',pady=3)
+        self.tabs=ttk.Notebook(content,width=380)
+        self.tabs.pack(side='left',fill='both',expand=True,padx=(10,0))
+        analysis_tab=ttk.Frame(self.tabs,padding=6)
+        self.reading_tab=ttk.Frame(self.tabs,padding=8)
+        settings=ttk.Frame(self.tabs,padding=8)
+        self.tabs.add(analysis_tab,text='Análise')
+        self.tabs.add(self.reading_tab,text='Leitura')
+        self.tabs.add(settings,text='Ajustes')
+        self.enginevar=StringVar(value='Aguardando posição…')
         self.sourcevar=StringVar(value='Origem: aguardando posição…')
         self.warningvar=StringVar(value='')
-        ttk.Label(right,textvariable=self.enginevar,wraplength=470).pack(anchor='w',pady=(0,6))
-        ttk.Label(right,textvariable=self.sourcevar,style='Hint.TLabel',wraplength=470).pack(anchor='w')
-        ttk.Label(right,textvariable=self.warningvar,style='Hint.TLabel',wraplength=470).pack(anchor='w',pady=6)
-        profilebar=ttk.Frame(right)
-        profilebar.pack(fill='x',pady=(0,5))
+        ttk.Label(analysis_tab,textvariable=self.enginevar,wraplength=360).pack(anchor='w')
+        profilebar=ttk.Frame(analysis_tab)
+        profilebar.pack(fill='x',pady=5)
         self.profile_label=StringVar(value='Humanizado (treino)' if self.config.get('human_enabled') else 'Análise máxima')
         self.human_skill=IntVar(value=self.config.get('human_skill',12))
-        profile_combo=ttk.Combobox(profilebar,textvariable=self.profile_label,state='readonly',width=21,
+        profile_combo=ttk.Combobox(profilebar,textvariable=self.profile_label,state='readonly',width=18,
                                   values=['Análise máxima','Humanizado (treino)'])
         profile_combo.pack(side='left')
         profile_combo.bind('<<ComboboxSelected>>',lambda _:self.apply_profile())
         ttk.Label(profilebar,text=' Nível').pack(side='left')
-        tk.Spinbox(profilebar,from_=0,to=19,textvariable=self.human_skill,width=4).pack(side='left',padx=4)
-        ttk.Button(profilebar,text='Aplicar perfil',command=self.apply_profile).pack(side='left')
-        ttk.Label(right,text='Humanizado: nível maior = mais forte; busca de até 2 segundos.',
-                  style='Hint.TLabel',wraplength=470).pack(anchor='w')
-        moves_frame=ttk.Frame(right)
-        moves_frame.pack(fill='both',expand=True,pady=(8,9))
-        self.moves_text=Text(moves_frame,bg='#192233',fg='#e9eff8',insertbackground='white',
-            wrap='word',font=('Consolas',11),borderwidth=0,padx=12,pady=12,height=12)
+        tk.Spinbox(profilebar,from_=0,to=19,textvariable=self.human_skill,width=3).pack(side='left',padx=3)
+        ttk.Button(profilebar,text='Aplicar',command=self.apply_profile).pack(side='left')
+        moves_frame=ttk.Frame(analysis_tab)
+        moves_frame.pack(fill='both',expand=True,pady=3)
+        self.moves_text=Text(moves_frame,bg='#192233',fg='#e9eff8',insertbackground='white',wrap='word',
+                             font=('Consolas',10),borderwidth=0,padx=8,pady=8,height=10,width=32)
         moves_scroll=ttk.Scrollbar(moves_frame,orient='vertical',command=self.moves_text.yview)
         moves_scroll.pack(side='right',fill='y')
         self.moves_text.configure(yscrollcommand=moves_scroll.set)
         self.moves_text.pack(side='left',fill='both',expand=True)
-        self.moves_text.insert('1.0','As 5 melhores variantes aparecerão aqui.\n\n'+
-            'Use a extensão no navegador, selecione Ler tela ou informe um FEN.\n'+
-            'A análise e a captura acontecem localmente.')
+        self.moves_text.insert('1.0','As sugestões aparecerão aqui.\n\nLeitura: selecione a área do tabuleiro.\nAjustes: motor e FEN manual.\n\nF11 mantém o tabuleiro e reduz os controles.')
         self.moves_text.configure(state='disabled')
-
-        controls=ttk.Frame(right)
-        controls.pack(fill='x')
+        display=ttk.Frame(analysis_tab)
+        display.pack(fill='x',pady=(4,0))
+        initial_mode=self.config.get('display_mode','first')
+        if initial_mode not in DISPLAY_LABELS:initial_mode='first'
+        self.display_key=StringVar(value=initial_mode)
+        self.display_label=StringVar(value=DISPLAY_LABELS[initial_mode])
+        self.display_combo=ttk.Combobox(display,textvariable=self.display_label,
+            values=list(DISPLAY_LABELS.values()),state='readonly',width=22)
+        self.display_combo.pack(side='left',fill='x',expand=True)
+        self.display_combo.bind('<<ComboboxSelected>>',self.on_display_selected)
+        ttk.Button(display,text='Recalcular',command=self.reanalyse).pack(side='left',padx=(4,0))
+        ttk.Label(self.reading_tab,text='Captura do tabuleiro',font=('Segoe UI',10,'bold')).pack(anchor='w')
+        ttk.Label(self.reading_tab,text='Comece na posição inicial. A captura continua tentando quando algo passa na frente.',
+                  style='Hint.TLabel',wraplength=350).pack(anchor='w',pady=(3,8))
+        self.screen_orientation=StringVar(value='Brancas embaixo')
+        ttk.Combobox(self.reading_tab,textvariable=self.screen_orientation,state='readonly',width=22,
+                     values=['Brancas embaixo','Pretas embaixo']).pack(anchor='w',pady=2)
+        self.capture_mode=StringVar(value='Automático' if self.config.get('capture_mode')=='automatic' else 'Manual')
+        capture_combo=ttk.Combobox(self.reading_tab,textvariable=self.capture_mode,state='readonly',width=22,
+                                  values=['Manual','Automático'])
+        capture_combo.pack(anchor='w',pady=2)
+        capture_combo.bind('<<ComboboxSelected>>',lambda _:self.state.update_view_settings(
+            capture_mode='automatic' if self.capture_mode.get()=='Automático' else 'manual'))
+        actions=ttk.Frame(self.reading_tab)
+        actions.pack(fill='x',pady=8)
+        ttk.Button(actions,text='Selecionar área',command=self.select_screen_board).pack(side='left')
+        ttk.Button(actions,text='Tentar novamente',command=self.retry_screen).pack(side='left',padx=4)
+        ttk.Button(actions,text='Parar',command=self.stop_screen).pack(side='left')
+        self.screen_status=StringVar(value='Captura não iniciada.')
+        ttk.Label(self.reading_tab,textvariable=self.screen_status,wraplength=350).pack(anchor='w',pady=5)
+        ttk.Label(self.reading_tab,textvariable=self.sourcevar,style='Hint.TLabel',wraplength=350).pack(anchor='w')
+        ttk.Label(self.reading_tab,textvariable=self.warningvar,style='Hint.TLabel',wraplength=350).pack(anchor='w',pady=5)
+        ttk.Button(self.reading_tab,text='Copiar FEN reconhecido',command=self.copy_fen).pack(anchor='w',pady=5)
+        turnrow=ttk.Frame(self.reading_tab)
+        turnrow.pack(fill='x',pady=5)
+        self.turn_label=StringVar(value='Brancas')
+        ttk.Combobox(turnrow,textvariable=self.turn_label,state='readonly',width=10,
+                     values=['Brancas','Pretas']).pack(side='left')
+        ttk.Button(turnrow,text='Confirmar turno',command=lambda:self.change_turn(
+            'w' if self.turn_label.get()=='Brancas' else 'b')).pack(side='left',padx=4)
+        self.ontop=BooleanVar(value=bool(self.config.get('always_on_top')))
+        ttk.Checkbutton(settings,text='Sempre visível',variable=self.ontop,command=self.set_on_top).pack(anchor='w')
         self.pathvar=StringVar(value=self.config['stockfish'])
-        ttk.Label(controls,text='Stockfish.exe').grid(row=0,column=0,sticky='w',pady=4)
-        ttk.Entry(controls,textvariable=self.pathvar,width=38).grid(row=0,column=1,columnspan=4,sticky='ew',padx=5)
-        ttk.Button(controls,text='Escolher',command=self.choose_stockfish).grid(row=0,column=5)
+        ttk.Label(settings,text='Motor Stockfish').pack(anchor='w',pady=(8,2))
+        pathrow=ttk.Frame(settings)
+        pathrow.pack(fill='x')
+        ttk.Entry(pathrow,textvariable=self.pathvar,width=26).pack(side='left',fill='x',expand=True)
+        ttk.Button(pathrow,text='…',width=3,command=self.choose_stockfish).pack(side='left',padx=3)
         self.depthvar=IntVar(value=self.config['depth'])
         self.secondsvar=IntVar(value=self.config['seconds'])
         self.threadsvar=IntVar(value=self.config['threads'])
         self.hashvar=IntVar(value=self.config['hash'])
-        controls.columnconfigure(1,weight=1)
-        for col,(label,var,lo,hi) in enumerate((('Depth',self.depthvar,1,99),
-                                               ('Tempo (s)',self.secondsvar,0,86400),
-                                               ('CPU threads',self.threadsvar,1,64),
-                                               ('Hash MB',self.hashvar,16,4096))):
-            ttk.Label(controls,text=label).grid(row=1,column=col+1,sticky='w',pady=(10,3))
-            tk.Spinbox(controls,from_=lo,to=hi,textvariable=var,width=8).grid(row=2,column=col+1,sticky='w')
-        ttk.Button(controls,text='Aplicar e reanalisar',command=self.apply).grid(row=3,column=1,columnspan=3,sticky='w',pady=(12,2))
-        ttk.Button(controls,text='Reanalisar',command=self.reanalyse).grid(row=3,column=4,columnspan=2,sticky='e',pady=(12,2))
-        row=ttk.Frame(right)
-        row.pack(fill='x',pady=10)
-        self.ontop=BooleanVar(value=bool(self.config.get('always_on_top')))
-        ttk.Checkbutton(row,text='Sempre visível',variable=self.ontop,command=self.set_on_top).pack(side='left')
-        ttk.Button(row,text='Vez: brancas',command=lambda:self.change_turn('w')).pack(side='left',padx=6)
-        ttk.Button(row,text='Vez: pretas',command=lambda:self.change_turn('b')).pack(side='left')
-
-        display=ttk.Frame(right)
-        display.pack(fill='x',pady=(0,8))
-        ttk.Label(display,text='Mostrar:').pack(side='left',padx=(0,5))
-        initial_mode=self.config.get('display_mode','all')
-        if initial_mode not in DISPLAY_LABELS:initial_mode='all'
-        self.display_key=StringVar(value=initial_mode)
-        self.display_label=StringVar(value=DISPLAY_LABELS[initial_mode])
-        self.display_combo=ttk.Combobox(display,textvariable=self.display_label,
-            values=list(DISPLAY_LABELS.values()),state='readonly',width=24)
-        self.display_combo.pack(side='left',fill='x',expand=True,padx=(0,7))
-        self.display_combo.bind('<<ComboboxSelected>>',self.on_display_selected)
-        ttk.Button(display,text='◧  Só tabuleiro (F11)',command=lambda:self.set_board_only(True)).pack(side='left')
-
-        capture=ttk.Frame(left)
-        capture.pack(fill='x',pady=5)
-        self.screen_orientation=StringVar(value='Brancas embaixo')
-        ttk.Combobox(capture,textvariable=self.screen_orientation,state='readonly',width=17,
-                     values=['Brancas embaixo','Pretas embaixo']).pack(side='left')
-        self.capture_mode=StringVar(value='Automático' if self.config.get('capture_mode')=='automatic' else 'Manual')
-        capture_combo=ttk.Combobox(capture,textvariable=self.capture_mode,state='readonly',width=11,
-                                   values=['Manual','Automático'])
-        capture_combo.pack(side='left',padx=3)
-        capture_combo.bind('<<ComboboxSelected>>',lambda _:self.state.update_view_settings(
-            capture_mode='automatic' if self.capture_mode.get()=='Automático' else 'manual'))
-        ttk.Button(capture,text='Ler tela…',command=self.select_screen_board).pack(side='left',padx=4)
-        ttk.Button(capture,text='Parar',command=self.stop_screen).pack(side='left')
-        self.screen_status=StringVar(value='Sem extensão: calibre na posição inicial, no monitor principal.')
-        ttk.Label(left,textvariable=self.screen_status,style='Hint.TLabel',wraplength=430).pack(anchor='w')
-
+        controls=ttk.Frame(settings)
+        controls.pack(fill='x',pady=8)
+        for index,(label,var,lo,hi) in enumerate((('Profundidade',self.depthvar,1,99),
+                                                 ('Tempo (s)',self.secondsvar,0,86400),
+                                                 ('CPU',self.threadsvar,1,64),('Memória MB',self.hashvar,16,4096))):
+            row,col=divmod(index,2)
+            ttk.Label(controls,text=label).grid(row=row*2,column=col,sticky='w',padx=(0,18),pady=(3,1))
+            tk.Spinbox(controls,from_=lo,to=hi,textvariable=var,width=9).grid(row=row*2+1,column=col,sticky='w')
+        ttk.Button(settings,text='Aplicar ajustes',command=self.apply).pack(anchor='w',pady=4)
+        self.fenvar=StringVar(value=chess.STARTING_FEN)
+        ttk.Label(settings,text='FEN manual').pack(anchor='w',pady=(8,2))
+        ttk.Entry(settings,textvariable=self.fenvar,width=32).pack(fill='x')
+        ttk.Button(settings,text='Analisar FEN',command=self.manual_fen).pack(anchor='w',pady=4)
         self.compact_view=ttk.Frame(root)
         self.compact_canvas=Canvas(self.compact_view,width=self.CELL*8,height=self.CELL*8,
                                   bg='#242d3c',highlightthickness=0)
-        self.compact_canvas.pack(side='left')
-        sidebar=ttk.Frame(self.compact_view,width=170)
-        sidebar.pack(side='left',fill='both',expand=True,padx=10,pady=12)
-        ttk.Label(sidebar,text='Mostrar opção').pack(anchor='w',pady=(0,8))
+        self.compact_canvas.pack()
+        toolbar=ttk.Frame(self.compact_view)
+        toolbar.pack(fill='x',padx=4,pady=3)
+        ttk.Label(toolbar,text='Opções:').pack(side='left',padx=(0,3))
         for rank,mode in enumerate(RANK_MODES,1):
-            ttk.Radiobutton(sidebar,text=f'{rank}ª melhor opção',variable=self.display_key,
-                            value=mode,command=self.change_display_mode).pack(fill='x',pady=3)
-        ttk.Radiobutton(sidebar,text='Lance humanizado',variable=self.display_key,value='human',
-                        command=self.change_display_mode).pack(fill='x',pady=3)
+            ttk.Radiobutton(toolbar,text=f'{rank}ª',variable=self.display_key,value=mode,
+                            command=self.change_display_mode).pack(side='left',padx=1)
+        ttk.Radiobutton(toolbar,text='Hum.',variable=self.display_key,value='human',
+                        command=self.change_display_mode).pack(side='left',padx=1)
         self.compact_description=StringVar(value='Aguardando análise')
-        ttk.Label(sidebar,textvariable=self.compact_description,wraplength=155).pack(anchor='w',pady=10)
-        ttk.Label(sidebar,textvariable=self.screen_status,wraplength=155,style='Hint.TLabel').pack(anchor='w',pady=5)
-        ttk.Button(sidebar,text='Voltar (F11)',command=lambda:self.set_board_only(False)).pack(anchor='w')
+        self.compact_status=StringVar()
+        tk.Label(self.compact_view,textvariable=self.compact_status,bg='#111723',fg='#c5d2e4',
+                 font=('Segoe UI',9),height=2,anchor='nw',justify='left',wraplength=430).pack(fill='x',padx=5)
+        self.compact_description.trace_add('write',lambda *_:self.update_compact_status())
+        self.screen_status.trace_add('write',lambda *_:self.update_compact_status())
+        self.compact_menu=tk.Menu(root,tearoff=False)
+        self.compact_menu.add_command(label='Painel (F11)',command=lambda:self.set_board_only(False))
+        self.compact_menu.add_command(label='Nova área de leitura',command=self.select_screen_board)
+        self.compact_menu.add_command(label='Tentar leitura novamente',command=self.retry_screen)
+        self.compact_menu.add_command(label='Parar leitura',command=self.stop_screen)
+        self.compact_menu.add_command(label='Copiar FEN',command=self.copy_fen)
+        self.compact_menu.add_checkbutton(label='Sempre visível',variable=self.ontop,command=self.set_on_top)
+        self.compact_menu.add_separator()
+        for key,label in DISPLAY_LABELS.items():
+            self.compact_menu.add_radiobutton(label=label,variable=self.display_key,value=key,
+                                             command=self.change_display_mode)
+        ttk.Menubutton(toolbar,text='Mais',menu=self.compact_menu).pack(side='right')
         self.compact_canvas.bind('<Button-3>',self.show_compact_menu)
         self.compact_canvas.bind('<Double-Button-1>',lambda _:self.set_board_only(False))
-        self.compact_menu=tk.Menu(root,tearoff=False)
-        for key,label in DISPLAY_LABELS.items():
-            self.compact_menu.add_radiobutton(label=label,variable=self.display_key,
-                value=key,command=self.change_display_mode)
-        self.compact_menu.add_separator()
-        self.compact_menu.add_checkbutton(label='Sempre visível',variable=self.ontop,
-                                         command=self.set_on_top)
-        self.compact_menu.add_command(label='Voltar ao painel (Esc / F11)',
-                                      command=lambda:self.set_board_only(False))
         self.root.bind('<F11>',lambda _:self.set_board_only(not self.board_only))
         self.root.bind('<Escape>',lambda _:self.set_board_only(False) if self.board_only else None)
         self.root.bind('<KeyPress>',self.on_compact_key)
+        self.root.bind('<Destroy>',lambda event:self.cancel_poll() if event.widget==self.root else None,add='+')
         self.root.attributes('-topmost',self.ontop.get())
         if self.config.get('board_only'):
             self.set_board_only(True,remember=False)
@@ -658,6 +703,7 @@ class ChessVisionUI:
             except ValueError:pass
 
     def poll(self):
+        self.cancel_poll()
         for _ in range(80):
             try: event=self.state.ui_events.get_nowait()
             except queue.Empty:break
@@ -719,7 +765,13 @@ class ChessVisionUI:
             age = time.monotonic() - last
             if age > 8:
                 self.sourcevar.set('Sem leitura recente: verifique a tela ou a extensão.')
-        self.root.after(100,self.poll)
+        self.poll_job=self.root.after(100,self.poll)
+
+    def cancel_poll(self):
+        if self.poll_job is not None:
+            try:self.root.after_cancel(self.poll_job)
+            except tk.TclError:pass
+            self.poll_job=None
 
     def choose_stockfish(self):
         path=filedialog.askopenfilename(title='Selecione stockfish.exe',filetypes=[('Executáveis','*.exe'),('Todos','*.*')])
@@ -733,6 +785,77 @@ class ChessVisionUI:
             self.state.screen_active = False
         self.screen_status.set('Captura parada. A extensão pode receber posições novamente.')
 
+    def update_compact_status(self):
+        self.compact_status.set(self.compact_description.get()+'\n'+self.screen_status.get()[:76])
+
+    def copy_fen(self):
+        with self.state.lock:
+            fen=self.state.board.fen() if self.state.board is not None else None
+        if fen is None:
+            self.screen_status.set('Ainda não há uma posição reconhecida para copiar.')
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(fen)
+        self.screen_status.set('Último FEN reconhecido copiado.')
+
+    def retry_screen(self):
+        if self.screen_thread and self.screen_thread.is_alive():
+            self.stop_screen()
+            self.root.after(100,self.retry_screen)
+            return
+        if self.screen_reader is None or self.screen_bbox is None:
+            if self.screen_bbox:
+                self.fresh_screen(lambda photo:self.review_screen_board(photo,[self.screen_bbox]))
+            else:self.select_screen_board()
+            return
+        # Reuse calibration and legal-move history, including in mid-game.
+        self.screen_stop=threading.Event()
+        with self.state.lock:self.state.screen_active=True
+        self.state.pause_screen('Repetindo leitura; aguardando imagem estável.')
+        self.dock_capture_window(self.screen_bbox)
+        self.screen_status.set('Tentando novamente com a calibração existente…')
+        self.screen_thread=threading.Thread(target=self.read_screen,
+            args=(self.screen_reader,self.screen_bbox,self.screen_stop),daemon=True)
+        self.screen_thread.start()
+
+    def fresh_screen(self, callback, on_error=None):
+        """Let the compositor uncover the source before taking a new image."""
+        from PIL import ImageGrab
+        generation=self.capture_generation
+        windows=[self.root]
+        if self.screen_dialog is not None and self.screen_dialog.winfo_exists():
+            windows.append(self.screen_dialog)
+        states=[(window,window.state()) for window in windows]
+        for window,_ in states:window.withdraw()
+        def grab():
+            photo=None
+            error=None
+            try:photo=ImageGrab.grab()
+            except OSError as exc:error=str(exc)
+            finally:
+                for window,state in states:
+                    if window.winfo_exists() and state!='withdrawn':
+                        if state=='iconic':window.iconify()
+                        else:window.deiconify()
+            if generation!=self.capture_generation:return
+            if error:
+                self.screen_status.set('Falha ao capturar: '+error)
+                if on_error:on_error('Falha ao capturar: '+error)
+                return
+            callback(photo)
+        self.root.after(180,grab)
+
+    def dock_capture_window(self,bbox):
+        self.set_board_only(True)
+        from screen_reader import outside_position
+        width,height=self.root.winfo_screenwidth(),self.root.winfo_screenheight()
+        position=outside_position(bbox,(self.CELL*8+16,self.COMPACT_HEIGHT+40),(width,height))
+        if position is None:
+            self.root.iconify()
+            self.screen_status.set('Leitura ativa. Janela minimizada para não cobrir o tabuleiro.')
+        else:
+            self.root.geometry(f'{self.CELL*8}x{self.COMPACT_HEIGHT}+{position[0]}+{position[1]}')
+
     def select_screen_board(self):
         try:
             from PIL import ImageGrab, ImageTk
@@ -745,27 +868,15 @@ class ChessVisionUI:
             self.root.after(100, self.select_screen_board)
             return
         self.stop_screen()
-        messagebox.showinfo('Calibrar leitura da tela',
-            'Deixe o tabuleiro na posição INICIAL e totalmente visível no monitor principal.\n'
-            'Escolha a orientação antes de calibrar.\n\n'
-            'Manual: arraste sobre as 64 casas e ajuste os limites na prévia.\n'
-            'Automático: o programa localiza a grade para você conferir.\n'
-            'Esc cancela. Não cubra a região durante a leitura.\n'
-            'Tema, zoom ou posição da janela alterados exigem nova calibração.')
-        try:
-            screenshot=ImageGrab.grab()
-        except OSError as exc:
-            messagebox.showerror('Captura', str(exc))
-            return
+        self.fresh_screen(self.select_from_image)
+
+    def select_from_image(self,screenshot):
+        from PIL import ImageTk
         if self.capture_mode.get()=='Automático':
             self.locating_screen=True
             self.screen_status.set('Localizando grades 8×8 na tela…')
-            own_canvas=self.compact_canvas if self.board_only else self.canvas
-            own_bbox=(own_canvas.winfo_rootx(),own_canvas.winfo_rooty(),
-                      own_canvas.winfo_rootx()+own_canvas.winfo_width(),
-                      own_canvas.winfo_rooty()+own_canvas.winfo_height())
             threading.Thread(target=self.locate_screen_boards,
-                args=(screenshot,self.capture_generation,own_bbox),daemon=True).start()
+                args=(screenshot,self.capture_generation),daemon=True).start()
             return
         overlay=tk.Toplevel(self.root)
         overlay.attributes('-fullscreen', True)
@@ -791,6 +902,7 @@ class ChessVisionUI:
                   min(screenshot.width,max(start[0],event.x)),
                   min(screenshot.height,max(start[1],event.y)))
             overlay.destroy()
+            self.screen_bbox=bbox
             self.review_screen_board(screenshot,[bbox])
         canvas.bind('<ButtonPress-1>',press)
         canvas.bind('<B1-Motion>',drag)
@@ -815,10 +927,12 @@ class ChessVisionUI:
     def review_screen_board(self, screenshot, candidates):
         from PIL import ImageTk
         dialog=tk.Toplevel(self.root)
+        self.screen_dialog=dialog
+        photo_source=[screenshot]
         dialog.title('Conferir região do tabuleiro')
         dialog.resizable(False,False)
         dialog.transient(self.root)
-        frame=ttk.Frame(dialog,padding=12)
+        frame=ttk.Frame(dialog,padding=8)
         frame.pack(fill='both',expand=True)
         ttk.Label(frame,text='Confira se a grade coincide com as 64 casas.').pack(anchor='w')
         ttk.Label(frame,text='Ajuste os limites em pixels. Calibre na posição inicial.',style='Hint.TLabel').pack(anchor='w')
@@ -830,9 +944,10 @@ class ChessVisionUI:
         self.screen_review_vars=bounds
         for column,(label,var) in enumerate(zip(('X','Y','Largura','Altura'),bounds)):
             ttk.Label(controls,text=label).grid(row=0,column=column*2,padx=(5,2))
-            tk.Spinbox(controls,from_=0,to=max(screenshot.size),textvariable=var,width=6,
+            tk.Spinbox(controls,from_=0,to=max(screenshot.size),textvariable=var,width=5,
                        command=lambda:update_preview()).grid(row=0,column=column*2+1)
-        preview=Canvas(frame,width=440,height=440,bg='#111723',highlightthickness=0)
+        preview=Canvas(frame,width=280,height=280,bg='#111723',highlightthickness=0)
+        self.screen_preview=preview
         preview.pack(pady=6)
         warning=StringVar()
         ttk.Label(frame,textvariable=warning,wraplength=500).pack(anchor='w')
@@ -841,13 +956,14 @@ class ChessVisionUI:
         def update_preview():
             preview.delete('all')
             try:
+                screenshot=photo_source[0]
                 x,y,w,h=(v.get() for v in bounds)
                 if min(x,y)<0 or min(w,h)<160 or abs(w-h)>4:
                     raise ValueError('Use uma região quadrada, com pelo menos 160 pixels de lado.')
                 if x+w>screenshot.width or y+h>screenshot.height:
                     raise ValueError('A região precisa ficar inteiramente dentro da tela.')
                 crop=screenshot.crop((x,y,x+w,y+h))
-                crop.thumbnail((440,440))
+                crop.thumbnail((280,280))
                 photo=ImageTk.PhotoImage(crop)
                 preview.image=photo
                 preview.configure(width=crop.width,height=crop.height)
@@ -858,6 +974,7 @@ class ChessVisionUI:
                     preview.create_line(px,0,px,crop.height,fill='#00d9a3')
                     preview.create_line(0,py,crop.width,py,fill='#00d9a3')
                 warning.set(f'Região: ({x}, {y}) até ({x+w}, {y+h}) • {w} × {h} px')
+                self.screen_bbox=(x,y,x+w,y+h)
                 return x,y,x+w,y+h
             except (ValueError,tk.TclError) as exc:
                 warning.set(str(exc))
@@ -876,39 +993,65 @@ class ChessVisionUI:
             if bbox is None:return
             orientation='black' if self.screen_orientation.get()=='Pretas embaixo' else 'white'
             try:
-                reader=ScreenBoardReader(screenshot.crop(bbox),orientation)
-                if reader.read(screenshot.crop(bbox)) != chess.STARTING_BOARD_FEN:
+                reader=ScreenBoardReader(photo_source[0].crop(bbox),orientation)
+                if reader.read(photo_source[0].crop(bbox)) != chess.STARTING_BOARD_FEN:
                     raise ValueError('A calibração precisa começar na posição inicial.')
             except ValueError as exc:
                 warning.set(str(exc))
                 return
             dialog.destroy()
+            self.screen_dialog=None
             self.start_screen_capture(reader,bbox)
+
+        def recapture():
+            warning.set('Recapturando a tela…')
+            def replace(photo):
+                if not dialog.winfo_exists():return
+                photo_source[0]=photo
+                update_preview()
+            self.fresh_screen(replace,on_error=warning.set)
+
+        def new_area():
+            dialog.destroy()
+            self.screen_dialog=None
+            self.select_screen_board()
+
+        def cancel():
+            self.screen_dialog=None
+            self.screen_status.set('Calibração cancelada.')
+            dialog.destroy()
 
         buttons=ttk.Frame(frame)
         buttons.pack(fill='x',pady=8)
         if len(candidates)>1:
             ttk.Button(buttons,text='Outra região',command=lambda:choose(current[0]+1)).pack(side='left')
-        ttk.Button(buttons,text='Atualizar prévia',command=update_preview).pack(side='left',padx=4)
-        ttk.Button(buttons,text='Cancelar',command=dialog.destroy).pack(side='right')
+        ttk.Button(buttons,text='Tentar novamente',command=recapture).pack(side='left',padx=2)
+        ttk.Button(buttons,text='Nova área',command=new_area).pack(side='left',padx=2)
+        ttk.Button(buttons,text='Cancelar',command=cancel).pack(side='right')
         ttk.Button(buttons,text='Iniciar leitura',command=start).pack(side='right',padx=4)
         dialog.bind('<Return>',lambda _:update_preview())
-        dialog.bind('<Escape>',lambda _:dialog.destroy())
+        dialog.bind('<Escape>',lambda _:cancel())
+        dialog.protocol('WM_DELETE_WINDOW',cancel)
         choose(0)
         dialog.grab_set()
         return dialog
 
     def start_screen_capture(self, reader, bbox):
+        self.screen_reader=reader
+        self.screen_bbox=bbox
         self.screen_stop=threading.Event()
         stop=self.screen_stop
         with self.state.lock:
             self.state.screen_active=True
             self.state.tracker=BoardTracker()
+            self.state.tracker.update(chess.STARTING_BOARD_FEN)
+            self.state.pending_screen=None
             self.state.board=None
             self.state.revision+=1
             self.state.wakeup.set()
             self.state.ui_events.put(('clear', self.state.revision))
         self.screen_status.set('Captura ativa: mantenha o tabuleiro visível.')
+        self.dock_capture_window(bbox)
         self.screen_thread=threading.Thread(target=self.read_screen,args=(reader,bbox,stop),daemon=True)
         self.screen_thread.start()
 
@@ -923,16 +1066,17 @@ class ChessVisionUI:
                 if placement==previous:
                     with self.state.lock:
                         if stop.is_set() or not self.state.screen_active:return
-                        self.state.receive({'placement':placement,'moves':[],
+                        accepted=self.state.receive({'placement':placement,'moves':[],
                             'source':'Captura de tela','orientation':reader.orientation})
+                        if not accepted['ok']:raise ValueError(accepted['error'])
                     status='Captura ativa • posição reconhecida'
                 else:
-                    status='Aguardando posição estável…'
+                    status='Aguardando posição estável; a leitura continua…'
                     self.state.pause_screen(status)
                 previous=placement
             except (ValueError,OSError) as exc:
                 previous=None
-                status=f'Captura pausada: {exc}'
+                status=f'Aguardando imagem legível; tentando novamente: {exc}'
                 self.state.pause_screen(status)
             if status!=last_status and not stop.is_set():
                 self.state.ui_events.put(('screen_status',status))
@@ -1050,9 +1194,9 @@ class ChessVisionUI:
             self.full_view.pack_forget()
             self.compact_view.pack(fill='both',expand=True)
             size=self.CELL*8
-            self.root.minsize(size+190,size)
-            self.root.maxsize(size+190,size)
-            self.root.geometry(f'{size+190}x{size}')
+            self.root.minsize(size,self.COMPACT_HEIGHT)
+            self.root.maxsize(size,self.COMPACT_HEIGHT)
+            self.root.geometry(f'{size}x{self.COMPACT_HEIGHT}')
             self.compact_canvas.focus_set()
         else:
             self.compact_view.pack_forget()

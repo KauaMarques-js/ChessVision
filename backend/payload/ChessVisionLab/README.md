@@ -31,16 +31,16 @@ Depois de instalar, execute `GERAR_EXE_WINDOWS.bat`. O executável fica em **`di
 - **Depth**: `42` por padrão (42 *meios-lances* ≈ 21 lances completos por lado, se alcançados). Pode selecionar de 1 a 99. Profundidade alcançada é mostrada separadamente: não é garantido atingir o limite.
 - **Tempo (s)**: `0` por padrão, sem limite artificial de tempo: a busca segue até o limite de profundidade definido; pode consumir muito CPU.
 - **CPU threads / Hash MB**: número de threads e cache, ajustáveis para desempenho/bateria.
-- **FEN manual**: teste sem navegador — cole uma posição FEN válida e clique em **Analisar FEN digitado**.
+- **FEN manual**: na aba **Ajustes**, cole uma posição FEN válida e clique em **Analisar FEN**.
 - **Turno manual**: útil em tabuleiros abertos no meio da partida, quando o histórico não está disponível.
 - **Sempre visível**: mantém a janela acima de outras janelas.
 - **Mostrar variante**: escolha da **1ª até a 5ª melhor opção**, **Todas** (seta na 1ª) ou a alternância opcional a cada 3 segundos. A busca sempre solicita cinco variantes, independentemente da qualidade do seu último lance; posições com menos de cinco lances legais oferecem menos opções. A seta e o texto acompanham o ranking selecionado. Se a variante ainda não existir, o programa aguarda sem substituir por outra.
-- **Só tabuleiro (F11)**: tabuleiro com cinco seletores laterais visíveis. Clique na opção desejada ou use as teclas **1 a 5**; a seleção permanece até você escolher outra, enquanto o motor aprofunda os resultados. Ao entrar no F11, a alternância é desativada. **Esc**, **F11**, **Voltar** ou **duplo clique** retornam ao painel. Preferências são lembradas.
+- **F11 compacto**: tabuleiro de análise preservado em **440 × 440 px**, com seletores pequenos **abaixo** dele e janela de **440 × 510 px**. Clique na opção ou use **1 a 5**; **Hum. / H** seleciona a sugestão humanizada. **Mais** reúne painel, nova área, tentar novamente, parar, copiar FEN e sempre visível. **Esc**, **F11**, **Mais → Painel** ou **duplo clique** retornam ao painel de **880 × 550 px**, organizado em **Análise / Leitura / Ajustes**.
 
 ## Perfil Humanizado (treino)
 
 Escolha **Humanizado (treino)** no seletor de perfil. Ajuste **Nível** de **0 a 19**
-e clique em **Aplicar perfil**; o padrão é **12**. Números maiores representam
+e clique em **Aplicar** na aba Análise; o padrão é **12**. Números maiores representam
 maior força do motor. Esses níveis não são um Elo nem uma classificação humana.
 **Análise máxima** restaura o nível máximo nativo do motor.
 
@@ -58,7 +58,7 @@ Se o lance final não estiver nas cinco linhas recebidas, a interface mostra
 apenas o lance legal, sem inventar avaliação ou continuação. A avaliação vem
 da perspectiva das brancas, como no restante do programa.
 
-No F11, clique em **Lance humanizado** ou pressione **H**. Os seletores **1 a 5**
+No F11, clique em **Hum.** ou pressione **H**. Os seletores **1 a 5**
 continuam mostrando as respectivas variantes de análise; eles não substituem
 a sugestão do perfil. Trocar de perfil ou de posição limpa a sugestão anterior.
 As preferências são salvas. O aplicativo continua sem executar jogadas.
@@ -66,11 +66,13 @@ As preferências são salvas. O aplicativo continua sem executar jogadas.
 ## Ler a tela sem extensão
 
 1. Instale as dependências atualizadas (`python -m pip install -r requirements.txt`), incluindo Pillow.
-2. Deixe o tabuleiro 2D na **posição inicial**, totalmente visível no **monitor principal**, por exemplo no aplicativo Discord. Escolha **Brancas embaixo** ou **Pretas embaixo** no painel.
-3. Escolha **Manual** ou **Automático** ao lado da orientação e clique em **Ler tela…**. A preferência é lembrada. No modo Manual, arraste sobre as 64 casas. No Automático, o programa procura grades 8×8 de cores alternadas no monitor principal, sem reduzir a imagem para localizar os limites em pixels. Se houver várias, use **Outra região**; se não encontrar, selecione Manual.
-4. Confira a **prévia com a grade das 64 casas**. Nos dois modos, ajuste **X, Y, Largura e Altura**, em pixels, e clique em **Atualizar prévia**. Exclua molduras e coordenadas externas. **Iniciar leitura** valida os limites e calibra as peças; **Cancelar** ou **Esc** fecha a prévia. O modo automático localiza a região, mas não dispensa a calibração na posição inicial nem acompanha automaticamente uma janela movida.
+2. Deixe o tabuleiro 2D na **posição inicial**, no **monitor principal**, por exemplo no aplicativo Discord. Na aba **Leitura**, escolha **Brancas embaixo** ou **Pretas embaixo**.
+3. Escolha **Manual** ou **Automático** e clique em **Selecionar área**. A janela se oculta brevemente para não aparecer na imagem. A preferência é lembrada. No Manual, arraste sobre as 64 casas. No Automático, o programa procura grades 8×8 de cores alternadas na imagem original. Se houver várias, use **Outra região**; se não encontrar, selecione Manual.
+4. Confira a **prévia reduzida a 280 px**, com grade de 64 casas. Ajuste **X, Y, Largura e Altura**, em pixels, e pressione **Enter** para atualizar o recorte. **Tentar novamente**, dentro da prévia, captura uma **imagem nova** da tela, mantendo os limites. **Nova área** permite selecionar outros limites. A prévia menor não reduz a resolução usada para reconhecer as peças. **Iniciar leitura** calibra na posição inicial; **Cancelar / Esc** fecha.
 5. O leitor aprende as peças do tema selecionado e acompanha a região a cada 0,7 segundo. Duas imagens consecutivas precisam concordar antes de atualizar a posição. As imagens ficam apenas em memória local.
-6. **Parar** libera novamente a entrada pela extensão. Analisar um FEN manual também para a captura. Enquanto a captura estiver ativa, posições da extensão são ignoradas.
+6. Ao iniciar, o aplicativo entra no compacto e tenta se posicionar fora da região lida. Se não houver espaço para a janela completa, ela é minimizada; a leitura continua. **Tentar novamente**, na aba Leitura ou no menu Mais, retoma usando a calibração e o histórico existentes, sem voltar a aprender peças no meio da partida.
+7. Se outra janela ou animação passar na frente, a leitura **permanece ativa**: retira as setas antigas, aguarda e tenta novamente a cada captura. Duas imagens estáveis retomam a análise. Uma posição incompatível com o histórico não apaga o último estado confiável. Se vários lances foram perdidos, use **Confirmar turno** para aceitar a posição observada com aviso de histórico estimado, ou informe um FEN completo em Ajustes.
+8. **Copiar FEN reconhecido** copia a última posição aceita. **Parar** libera novamente a extensão. Analisar um FEN manual também para a captura. Enquanto a captura estiver ativa, a extensão é ignorada.
 
 Mantenha o tabuleiro descoberto: janelas sobrepostas, animações, temas 3D, peças pouco distinguíveis e efeitos visuais podem impedir a leitura. Nova posição da janela, zoom, tema ou orientação exigem recalibração na posição inicial. A calibração pressupõe que você preparou a posição inicial; não identifica uma posição arbitrária sem referências. Durante leitura incerta, as sugestões anteriores são retiradas até uma posição estável ser reconhecida. Uma captura iniciada no meio da partida não recupera histórico de roque ou en passant. A integração ainda precisa de validação manual com o tema real do Discord.
 

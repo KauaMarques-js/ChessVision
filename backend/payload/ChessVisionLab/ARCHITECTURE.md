@@ -30,6 +30,19 @@ revisão, limpa as sugestões e suspende o motor até uma leitura estável.
 As imagens e amostras ficam somente em memória; não há automação de lances.
 Tema, zoom, orientação e região precisam permanecer iguais à calibração.
 
+Recuperação: leitura incerta mantém a thread ativa e preserva a calibração.
+Snapshots sem transição legal não substituem o histórico confiável da captura;
+ficam pendentes até a imagem se recuperar ou uma confirmação manual de turno.
+A representação das peças separa contraste claro/escuro da cor do fundo para
+reduzir falhas com destaques de último lance. Erros indicam a casa ambígua.
+Recapturar a prévia obtém uma nova imagem com as janelas do programa ocultas;
+repetir leitura em andamento reutiliza o leitor e o histórico, sem recalibrar.
+
+Interface: painel 880×550 em três abas; F11 440×510 com barra inferior. Os
+dois tabuleiros de análise continuam em 440×440. A prévia de calibração usa
+280 px apenas para exibição. Ao iniciar a captura, o compacto é colocado fora
+da região de origem ou minimizado se não há espaço, mantendo o processamento.
+
 Identificação da região: modo Manual (arraste) ou Automático (`detect_boards`).
 O localizador cruza oito segmentos horizontais e verticais de cores alternadas,
 valida os cantos das 64 casas e retorna limites em pixels da imagem original.

@@ -56,3 +56,14 @@ PASSOU: diagnóstico real da instalação pessoal, 5/5 (Tk, xadrez, reconstruç�
 PASSOU: abertura real pelo helper corrigido, processo iniciado e resposta /health em 127.0.0.1:8765.
 PASSOU: helper recompilado, hash conferido no pacote, self-test empacotado e npm run dist:win.
 NÃO EXECUTADO: instalação completa do novo NSIS sobre o gerenciador pessoal. O ambiente pessoal foi corrigido diretamente e o analisador já abriu.
+
+Atualização 2026-11-11 — leitura contínua e interface compacta
+CORRIGIDO: Tentar novamente na prévia recaptura a tela, ocultando as janelas do programa; repetir uma leitura existente preserva o leitor e o histórico. Falhas transitórias mantêm o processamento ativo, sem exigir nova calibração.
+CORRIGIDO: snapshots sem transição legal não apagam o histórico confiável; confirmação de turno valida a posição pendente antes de substituir o estado. Uma confirmação inválida preserva o estado anterior.
+MELHORADO: contraste claro/escuro separado da cor do fundo para realces de último lance, indicação de casa incerta e validação de peões na calibração inicial.
+INTERFACE: abas Análise/Leitura/Ajustes em 880x550; F11 440x510 com seletores inferiores e menu Mais; prévia de 280px. Tabuleiro de análise preservado em 440x440. Compacto tenta ficar fora da área capturada ou é minimizado quando não há espaço.
+PASSOU: 31 testes Python, incluindo obstrução e recuperação automáticas, realces coloridos, calibração inválida, recaptura real da imagem no fluxo Tk, preservação do histórico e dimensões da UI.
+PASSOU: 5 testes Go do backend.
+PASSOU: capturas reais do Canvas Tk reconhecidas na posição inicial e após 6 movimentos legais; revisão visual das três abas, F11 e prévia. Imagens em artifacts/compact-*.png e artifacts/reader-preview-small.png na raiz do workspace.
+PASSOU: build Vite, helper recompilado, hashes conferidos, self-test do helper empacotado e instalador NSIS x64 gerado. Arquivo final em release/ChessVision-Manager-Setup-1.0.0-x64.exe.
+NÃO EXECUTADO: reiniciar a partida pessoal em andamento. A leitura com o tema exato do Lichess deve ser conferida após atualizar e calibrar novamente na posição inicial. Não há garantia de reconhecimento para todo tema.

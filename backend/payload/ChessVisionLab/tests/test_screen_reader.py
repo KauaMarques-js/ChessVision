@@ -5,10 +5,10 @@ import chess
 from PIL import Image, ImageDraw, ImageFont
 
 import app
-from screen_reader import ScreenBoardReader, square_at, detect_boards
+from screen_reader import ScreenBoardReader, square_at, detect_boards, outside_position
 
 
-def render(board, orientation='white', highlight=None):
+def render(board, orientation='white', highlight=None, highlights=None):
     image = Image.new('RGB', (480, 480))
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default(size=42)
@@ -18,6 +18,8 @@ def render(board, orientation='white', highlight=None):
             bg = (150, 180, 140) if (row+col) % 2 else (220, 210, 180)
             if square == highlight:
                 bg = (190, 200, 120)
+            if highlights and square in highlights:
+                bg = highlights[square]
             draw.rectangle((col*60, row*60, (col+1)*60-1, (row+1)*60-1), fill=bg)
             piece = board.piece_at(square)
             if piece:
@@ -27,6 +29,112 @@ def render(board, orientation='white', highlight=None):
 
 
 class ScreenReaderTests(unittest.TestCase):
+    def test_calibration_does_not_mislabel_empty_starting_pawn_squares(self):
+        board=chess.Board()
+        board.push_san('c4')
+        board.push_san('c6')
+        with self.assertRaisesRegex(ValueError,'posição inicial'):
+            ScreenBoardReader(render(board))
+
+    def test_uncertain_snapshot_does_not_destroy_history_and_can_be_confirmed(self):
+        state=app.AnalysisState()
+        state.screen_active=True
+        initial=chess.Board()
+        state.receive({'source':'Captura de tela','placement':initial.board_fen()})
+        observed=initial.copy()
+        for san in ('e4','e5','Nf3'):observed.push_san(san)
+        response=state.receive({'source':'Captura de tela','placement':observed.board_fen()})
+        self.assertFalse(response['ok'])
+        self.assertEqual(state.tracker.board.fen(),initial.fen())
+        self.assertTrue(state.screen_paused)
+        self.assertIsNotNone(state.pending_screen)
+        self.assertTrue(state.receive({'source':'Captura de tela','placement':initial.board_fen()})['ok'])
+        self.assertFalse(state.screen_paused)
+        self.assertIsNone(state.pending_screen)
+        state.receive({'source':'Captura de tela','placement':observed.board_fen()})
+        state.force_turn('b')
+        self.assertEqual(state.board.board_fen(),observed.board_fen())
+        self.assertEqual(state.mode,'turno manual')
+        self.assertFalse(state.screen_paused)
+        trusted=state.tracker
+        checking=chess.Board('4k3/8/8/8/8/8/4R3/K7 b - - 0 1')
+        state.receive({'source':'Captura de tela','placement':checking.board_fen()})
+        with self.assertRaises(ValueError):state.force_turn('w')
+        self.assertIs(state.tracker,trusted)
+        self.assertIsNotNone(state.pending_screen)
+        state.force_turn('b')
+        self.assertEqual(state.board.board_fen(),checking.board_fen())
+
+    def test_outlined_chess_glyphs_survive_colored_highlights(self):
+        try:font=ImageFont.truetype('C:/Windows/Fonts/seguisym.ttf',50)
+        except OSError:self.skipTest('Windows chess font unavailable')
+        glyphs={'k':'♚','q':'♛','r':'♜','b':'♝','n':'♞','p':'♟'}
+        def picture(board,highlights=None):
+            image=Image.new('RGB',(656,656))
+            draw=ImageDraw.Draw(image)
+            for row in range(8):
+                for col in range(8):
+                    square=chess.square(col,7-row)
+                    bg=(highlights or {}).get(square,(240,217,181) if (row+col)%2==0 else (181,136,99))
+                    draw.rectangle((col*82,row*82,(col+1)*82-1,(row+1)*82-1),fill=bg)
+                    p=board.piece_at(square)
+                    if p:draw.text((col*82+41,row*82+41),glyphs[p.symbol().lower()],font=font,anchor='mm',
+                                   fill='white' if p.color else 'black',stroke_width=1,
+                                   stroke_fill='black' if p.color else 'white')
+            return image
+        reader=ScreenBoardReader(picture(chess.Board()))
+        board=chess.Board()
+        board.push_san('c4')
+        board.push_san('c6')
+        for color in ((163,168,45),(75,145,205)):
+            self.assertEqual(reader.read(picture(board,{chess.C7:color,chess.C6:color})),board.board_fen())
+
+    def test_viewer_can_be_placed_outside_source_or_report_no_space(self):
+        bbox=(51,229,707,885)
+        position=outside_position(bbox,(456,540),(1657,1043))
+        self.assertIsNotNone(position)
+        x,y=position
+        self.assertTrue(x>=bbox[2] or x+456<=bbox[0] or y>=bbox[3] or y+540<=bbox[1])
+        self.assertIsNone(outside_position((0,0,1280,720),(456,540),(1280,720)))
+
+    def test_live_reader_keeps_retrying_after_occlusion_and_resumes(self):
+        initial=render(chess.Board())
+        blocked=initial.copy()
+        ImageDraw.Draw(blocked).rectangle((0,0,479,150),fill='red')
+        moved=chess.Board()
+        moved.push_san('e4')
+        frames=[initial,initial,blocked,blocked,initial,initial,render(moved),render(moved)]
+        reader=ScreenBoardReader(initial)
+        state=app.AnalysisState()
+        state.screen_active=True
+        ui=app.ChessVisionUI.__new__(app.ChessVisionUI)
+        ui.state=state
+        class Stop:
+            count=0
+            def is_set(self):return self.count>=len(frames)
+            def wait(self,_):self.count+=1
+        with patch('PIL.ImageGrab.grab',side_effect=frames):
+            ui.read_screen(reader,(0,0,480,480),Stop())
+        self.assertTrue(state.screen_active)
+        self.assertFalse(state.screen_paused)
+        self.assertEqual(state.board.fen(),moved.fen())
+        self.assertEqual(state.mode,'movimentos legais')
+        events=[]
+        while not state.ui_events.empty():events.append(state.ui_events.get_nowait())
+        self.assertTrue(any(e[0]=='clear' for e in events))
+        statuses=[e[1] for e in events if e[0]=='screen_status']
+        self.assertTrue(any('tentando novamente' in s for s in statuses))
+        self.assertIn('posição reconhecida',statuses[-1])
+    def test_last_move_highlights_do_not_pause_reading(self):
+        reader=ScreenBoardReader(render(chess.Board()))
+        board=chess.Board()
+        board.push_san('c4')
+        board.push_san('c6')
+        for color in ((163,168,45),(245,220,60),(75,145,205)):
+            with self.subTest(color=color):
+                image=render(board,highlights={chess.C7:color,chess.C6:color})
+                self.assertEqual(reader.read(image),board.board_fen())
+
     def test_automatic_location_preserves_exact_pixel_boundaries(self):
         for size, position in ((480, (113, 79)), (328, (31, 21)), (481, (7, 13))):
             with self.subTest(size=size):

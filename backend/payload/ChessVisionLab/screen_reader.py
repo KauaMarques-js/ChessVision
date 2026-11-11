@@ -5,6 +5,20 @@ from PIL import Image, ImageChops, ImageStat
 import chess
 
 
+def outside_position(bbox, window_size, screen_size, margin=12):
+    """Place the viewer outside the source without resizing its board."""
+    left,top,right,bottom=bbox
+    ww,wh=window_size
+    sw,sh=screen_size
+    if ww>sw or wh>sh:return None
+    x=max(0,min(left,sw-ww))
+    y=max(0,min(top,sh-wh))
+    for px,py in ((right+margin,y),(left-margin-ww,y),(x,bottom+margin),(x,top-margin-wh)):
+        if 0<=px<=sw-ww and 0<=py<=sh-wh:
+            return px,py
+    return None
+
+
 def _similar(a, b):
     return all(abs(x-y) <= 12 for x, y in zip(a, b))
 
@@ -88,15 +102,18 @@ def square_at(row, col, orientation):
 
 
 def feature(tile):
-    # Subtract each square's background so highlights and board colors have
-    # less influence. Keep both positive and negative edges for white/black.
-    tile = tile.convert('RGB').resize((32, 32), Image.Resampling.LANCZOS)
+    # Separate light/dark foreground contrast from the square's hue. This
+    # preserves piece outlines when last-move highlights change the background.
+    tile = tile.convert('L').resize((32, 32), Image.Resampling.LANCZOS)
     corners = [tile.getpixel(p) for p in ((2, 2), (29, 2), (2, 29), (29, 29))]
-    background = tuple(sorted(p[c] for p in corners)[2] for c in range(3))
-    bg = Image.new('RGB', tile.size, background)
-    residual = ImageChops.subtract(tile, bg, scale=2, offset=128).crop((3, 3, 29, 29))
-    amplitude = max(16, *(abs(v-128) for bounds in residual.getextrema() for v in bounds))
-    return residual.point(lambda v: round(128+(v-128)*120/amplitude))
+    bg = Image.new('L',tile.size,sorted(corners)[2])
+    positive=ImageChops.subtract(tile,bg).crop((3,3,29,29))
+    negative=ImageChops.subtract(bg,tile).crop((3,3,29,29))
+    def normalize(channel):
+        amplitude=max(16,channel.getextrema()[1])
+        return channel.point(lambda value:round(value*255/amplitude))
+    positive,negative=normalize(positive),normalize(negative)
+    return Image.merge('RGB',(positive,negative,ImageChops.lighter(positive,negative)))
 
 
 class ScreenBoardReader:
@@ -125,6 +142,16 @@ class ScreenBoardReader:
             if any(self._distance(tile, other) < 1.5
                    for s, other in samples.items() if s != symbol):
                 raise ValueError('Peças indistinguíveis. Confira a região e use a posição inicial, sem animações.')
+        # Calibration must generalize across repeated pawns, rather than
+        # "recognizing" an empty starting square as a pawn from its own sample.
+        for symbol in ('P','p'):
+            group=self.templates[symbol]
+            for index,tile in enumerate(group):
+                same=min(self._distance(tile,other) for i,other in enumerate(group) if i!=index)
+                different=min(self._distance(tile,other) for key,values in self.templates.items()
+                              if key!=symbol for other in values)
+                if same+.8>=different:
+                    raise ValueError('Peões iniciais inconsistentes. Volte à posição inicial e confira os limites da área.')
 
     def _tile(self, image, row, col):
         w, h = image.size
@@ -146,7 +173,8 @@ class ScreenBoardReader:
                                  for symbol, templates in self.templates.items())
                 (distance, symbol), (runner_up, _) = matches[:2]
                 if distance > 10 or runner_up-distance < 1.2:
-                    raise ValueError('Leitura incerta; deixe as peças visíveis e aguarde o fim da animação.')
+                    square=chess.square_name(square_at(row,col,self.orientation))
+                    raise ValueError(f'Casa {square}: peça incerta. Aguarde a área ficar visível.')
                 if symbol != '.':
                     board.set_piece_at(square_at(row, col, self.orientation), chess.Piece.from_symbol(symbol))
         if len(board.pieces(chess.KING, chess.WHITE)) != 1 or len(board.pieces(chess.KING, chess.BLACK)) != 1:
