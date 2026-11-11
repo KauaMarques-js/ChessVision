@@ -17,10 +17,41 @@ Processo Python: LocalHandler / AnalysisState
 engine_worker: python-chess + UCI Stockfish 19
    │  principal variation + depth + avaliação
    ▼
-Interface Tkinter: posição, 3 linhas, análise incremental e diagnóstico
+Interface Tkinter: posição, até 5 linhas, seleção manual no F11 e diagnóstico
 ```
 
 ## Invariantes
+
+Fonte adicional: `ImageGrab` captura uma região do monitor principal a cada 0,7 s;
+`screen_reader.py` compara as casas com amostras calibradas na posição inicial.
+Duas leituras iguais passam ao mesmo `AnalysisState.receive` / `BoardTracker`.
+Enquanto a tela está ativa, a extensão é ignorada. Leitura incerta invalida a
+revisão, limpa as sugestões e suspende o motor até uma leitura estável.
+As imagens e amostras ficam somente em memória; não há automação de lances.
+Tema, zoom, orientação e região precisam permanecer iguais à calibração.
+
+Identificação da região: modo Manual (arraste) ou Automático (`detect_boards`).
+O localizador cruza oito segmentos horizontais e verticais de cores alternadas,
+valida os cantos das 64 casas e retorna limites em pixels da imagem original.
+A busca roda fora da thread Tk; uma geração invalida resultados após Parar.
+Ambos os modos abrem uma prévia com grade, ajuste numérico dos limites e início
+explícito da leitura. Várias regiões podem ser percorridas antes da calibração.
+Sem grade completa, o automático informa a falha e sugere o modo Manual.
+
+Evolução solicitada: cinco opções manuais no modo F11, ranking preservado até
+nova escolha, sem depender da qualidade do último lance. O motor solicita
+MultiPV=5; menos lances legais podem resultar em menos variantes. A alternância
+continua opcional no painel e é desativada ao entrar no modo compacto.
+
+Perfil Humanizado (treino): usa `Skill Level` de 0 a 19, padrão 12, com
+`UCI_LimitStrength=false` (não mistura dois controles nativos de força).
+O limite de tempo efetivo é de até 2 segundos; respeita limites menores.
+O worker lê `analysis.wait().move` depois do fluxo MultiPV, valida a legalidade
+e publica `human_line` com revisão e FEN. A UI nunca usa a PV 1 como substituta
+enquanto aguarda a sugestão. Se o lance não aparece entre as cinco variantes,
+avaliação e continuação ficam indisponíveis, sem dados inventados.
+Trocar perfil invalida a revisão e limpa sugestões; retornar à análise máxima
+restaura `Skill Level=20`. Não há simulação cognitiva humana ou evasão de detecção.
 
 1. A localização de cada peça é uma coordenada lógica absoluta (a1 a h8); girar o tabuleiro **não** pode alterar o FEN.
 2. Um histórico só é aceito se sua reprodução legal produzir exatamente a configuração de peças observada.
@@ -28,7 +59,7 @@ Interface Tkinter: posição, 3 linhas, análise incremental e diagnóstico
 4. Se um tabuleiro for visto pela primeira vez no meio da partida sem histórico, não calcular variantes até confirmação de turno (estado marcado *estimado*).
 5. Lances recomendados somente são exibidos se a revisão da análise corresponde à revisão atual do tabuleiro; linhas antigas não podem aparecer após um movimento.
 6. Comunicações ficam em localhost. O cliente só envia posição e metadados do tabuleiro; não acessa senhas, cookies ou nomes de conta.
-7. O motor não tem limite artificial de Elo, mas a profundidade **alcançada** é exibida. Profundidade configurada não é garantia de execução até esse limite.
+7. A análise máxima usa a força máxima nativa; o perfil Humanizado limita explicitamente Skill Level. A profundidade **alcançada** é exibida. Profundidade configurada não é garantia de execução até esse limite.
 
 ## Degradação controlada
 

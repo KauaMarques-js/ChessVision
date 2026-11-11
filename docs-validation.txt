@@ -12,3 +12,47 @@ NÃO VALIDADO: renderização visual; Chromium bloqueado por restrição a socke
 NÃO VALIDADO: instalação/execução nativa no Windows, downloads completos e comunicação com navegador real.
 
 O teste DOM simula somente a ponte IPC; não comprova downloads, processos Windows ou renderização gráfica.
+
+Atualização 2026-11-11 — cinco opções manuais e leitura de tela
+PASSOU: 18 testes Python (incluindo GUI Tk, MultiPV=5 simulado, captura e regressões).
+PASSOU: 11 testes JavaScript da extensão e 4 testes do gerenciador.
+PASSOU: 4 testes Go do backend (go test ./...).
+PASSOU: busca real com Stockfish 19, cinco variantes legais, profundidade 9.
+PASSOU: capturas reais do Canvas Tk reconhecidas desde o início até roque (7 movimentos).
+PASSOU: inspeção visual do painel e F11 (artifacts/painel.png e artifacts/f11.png na raiz do workspace).
+PASSOU: helper Windows recompilado, extração self-test no binário empacotado e hashes idênticos.
+PASSOU: npm run dist:win (build Vite + Electron + instalador NSIS x64 atualizado em release/).
+NÃO VALIDADO: reconhecimento no tema real do Discord; requer calibração na posição inicial, monitor principal e região descoberta.
+NÃO EXECUTADO: instalação completa do novo EXE sobre a instalação pessoal existente.
+Não foram implementados ocultação de engine, evasão de detecção ou lances automáticos.
+
+Atualização 2026-11-11 — identificação Manual e Automática do tabuleiro
+PASSOU: 22 testes Python, incluindo limites exatos em diferentes tamanhos/posições, várias regiões, ausência/recorte parcial de tabuleiro, prévia numérica, descarte de busca antiga e exclusão da própria região do aplicativo.
+PASSOU: 4 testes Go do backend.
+PASSOU: localização na captura real do Canvas Tk; limites (20,98)-(460,538).
+PASSOU: fluxo público Automático -> busca em thread -> prévia com região exata, com imagem de teste e capturador simulado.
+PASSOU: revisão visual de artifacts/captura-modos.png e artifacts/captura-previa.png na raiz do workspace.
+PASSOU: helper recompilado, hash idêntico no pacote, self-test do helper empacotado.
+PASSOU: build Vite e instalador Electron/NSIS x64 atualizado (npm run dist:win).
+LIMITES: localização automática de grades 2D completas com fundos aproximadamente uniformes; calibração permanece na posição inicial, no monitor principal. Região não acompanha automaticamente uma janela movida.
+NÃO VALIDADO: tema real do Discord e instalação completa do novo EXE na instalação pessoal.
+
+Atualização 2026-11-11 — perfil Humanizado (treino)
+PASSOU: 24 testes Python, incluindo seleção do bestmove nativo em vez da PV 1, lance fora das cinco variantes sem avaliação inventada, limite de busca, restauração do Skill Level máximo, validação do nível e descarte de sugestões antigas na UI.
+PASSOU: 4 testes Go do backend.
+PASSOU: worker real com Stockfish 19 em Skill Level 7, sugestão legal e retorno à análise máxima com cinco variantes em profundidade >=8.
+PASSOU: revisão visual do painel e F11; seis seletores e botão Voltar cabem na janela. Imagens em artifacts/humanizado-painel.png e artifacts/humanizado-f11.png na raiz do workspace.
+PASSOU: helper recompilado, hash idêntico no pacote e self-test de extração do binário empacotado.
+PASSOU: npm run dist:win; instalador NSIS Windows x64 atualizado.
+LIMITES: força reduzida nativa não simula fielmente um humano, não determina quando errar para evitar detecção e não garante vitória ou proteção contra banimentos. Níveis 0-19 não representam Elo. Continua sem executar jogadas.
+NÃO EXECUTADO: instalação completa do EXE na instalação pessoal.
+
+Atualização 2026-11-11 — abertura com dependência Pillow ausente
+CAUSA CONFIRMADA: ambiente pessoal tinha chess e Tk funcionais, mas import PIL falhava. O comando Abrir copiava os arquivos novos e rejeitava o ambiente sem instalar o novo requisito.
+CORRIGIDO NO COMPUTADOR: Pillow 13.0.0 instalado no ambiente existente; sem recriar Python ou reinstalar Stockfish.
+CORRIGIDO NO CÓDIGO: Abrir atualiza requisitos ausentes quando Python/Tk funcionam; validação informa a causa específica. Instalação normal também reaproveita um ambiente funcional ao completar bibliotecas.
+PASSOU: 5 testes Go, incluindo regressão offline com subprocessos Python/Tk, ausência simulada de Pillow, atualização única das dependências e preservação de ambiente/configuração.
+PASSOU: diagnóstico real da instalação pessoal, 5/5 (Tk, xadrez, reconstrução, HTTP e Stockfish 19 com cinco variantes).
+PASSOU: abertura real pelo helper corrigido, processo iniciado e resposta /health em 127.0.0.1:8765.
+PASSOU: helper recompilado, hash conferido no pacote, self-test empacotado e npm run dist:win.
+NÃO EXECUTADO: instalação completa do novo NSIS sobre o gerenciador pessoal. O ambiente pessoal foi corrigido diretamente e o analisador já abriu.

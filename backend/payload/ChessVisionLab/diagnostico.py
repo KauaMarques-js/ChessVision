@@ -32,6 +32,8 @@ def main():
     try:
         import chess
         import chess.engine
+        from PIL import ImageGrab, ImageTk
+        from screen_reader import ScreenBoardReader
         from tracker import BoardTracker
         from app import AnalysisState, LocalHandler, find_stockfish
         record(True, 'Biblioteca de xadrez', getattr(chess, '__version__', 'instalada'))
@@ -86,13 +88,13 @@ def main():
             assert 'Stockfish 19' in name, f'Motor encontrado nao e Stockfish 19: {name}'
             # A real UCI search, not just checking that the file exists.
             board = chess.Board()
-            infos = engine.analyse(board, chess.engine.Limit(depth=7), multipv=3,
+            infos = engine.analyse(board, chess.engine.Limit(depth=7), multipv=5,
                                    info=chess.engine.INFO_ALL)
-            assert len(infos) == 3, f'Esperadas 3 variantes, recebidas {len(infos)}'
+            assert len(infos) == 5, f'Esperadas 5 variantes, recebidas {len(infos)}'
             for info in infos:
                 assert info.get('pv') and info['pv'][0] in board.legal_moves
                 assert info.get('depth', 0) >= 7
-            record(True, 'Stockfish UCI + busca real de 3 variantes',
+            record(True, 'Stockfish UCI + busca real de 5 variantes',
                    f'{name}, depth {infos[0]["depth"]}, {Path(path).name}')
         except Exception as exc:
             record(False, 'Stockfish UCI + busca real', str(exc))

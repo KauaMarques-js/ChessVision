@@ -6,13 +6,19 @@ Este projeto é uma prova de conceito acadêmica de leitura de posições e aná
 
 1. Execute `ChessVisionLab-Instalador-Windows-x64-v2.1.exe` com duplo clique. O instalador extrai os arquivos embutidos para `%LOCALAPPDATA%\ChessVisionLab`.
 2. Detecta Python capaz de **abrir uma janela Tk real**, verificando os arquivos `init.tcl` e `tk.tcl`. Caso o Python 3.13 existente esteja incompleto, ignora a instalação defeituosa e utiliza um runtime próprio. Se ausente, baixa e instala **Python 3.14.10** do domínio oficial `python.org` em uma pasta local do projeto, sem exigir que você instale Python manualmente.
-3. Cria ambiente Python isolado e instala `python-chess`.
+3. Cria ambiente Python isolado e instala `python-chess` e `Pillow`.
 4. Baixa e extrai **Stockfish 19** da distribuição oficial, se necessário; executa um teste direto do protocolo UCI.
-5. Realiza um diagnóstico de ponta a ponta: reconstrução de lances, servidor localhost e busca real do Stockfish com três variantes.
+5. Realiza um diagnóstico de ponta a ponta: reconstrução de lances, servidor localhost e busca real do Stockfish com cinco variantes.
 6. Cria um atalho no Menu Iniciar e abre a pasta `extension/` no Explorador. **A autorização para carregar uma extensão local ainda precisa ser feita pelo usuário no Chrome/Edge:** ativar o *Modo do desenvolvedor* e selecionar *Carregar sem compactação* > `%LOCALAPPDATA%\ChessVisionLab\extension`.
 7. Inicia a interface do ChessVision Lab. Ao executar de novo, reaproveita as dependências instaladas.
 
-O instalador precisa de Internet **na primeira instalação** para buscar Python, as dependências e Stockfish. As análises posteriores são locais, sem API paga. A instalação ocupa bem mais espaço em disco do que o instalador compacto.
+O instalador precisa de Internet **na primeira instalação** para buscar Python, as dependências e Stockfish. Uma atualização com dependências novas também pode precisar de Internet. As análises posteriores são locais, sem API paga. A instalação ocupa bem mais espaço em disco do que o instalador compacto.
+
+Ao clicar em **Abrir ChessVision**, o lançador confere as dependências após
+atualizar os arquivos. Se Python e Tk funcionam, mas falta uma biblioteca como
+Pillow, instala os requisitos no ambiente existente, sem recriá-lo. Preferências
+e motor são preservados. Se a validação falhar, o registro mostra a causa exata
+em vez de apenas informar que o ambiente Python é inválido.
 
 ## Controles disponíveis
 

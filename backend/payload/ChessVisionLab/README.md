@@ -2,7 +2,7 @@
 
 **Projeto educacional de leitura de tabuleiro no navegador + Stockfish 19 (NNUE).**
 
-O aplicativo tem dois componentes: **janela de desktop Python/Tkinter** e **extensão Chrome/Edge**. A extensão lê o DOM do tabuleiro aberto no Chess.com e envia a posição para `127.0.0.1:8765`. O aplicativo acompanha a partida e calcula até três variantes com o motor UCI **Stockfish 19**, sem enviar dados a serviços externos. Não clica ou joga lances automaticamente.
+O aplicativo tem uma **janela de desktop Python/Tkinter** com duas fontes de posição: **extensão Chrome/Edge** ou **captura local da tela**. A extensão lê o DOM do tabuleiro aberto no Chess.com e envia a posição para `127.0.0.1:8765`. A captura reconhece um tabuleiro 2D calibrado, sem extensão. O aplicativo calcula até cinco variantes com o motor UCI **Stockfish 19**, sem enviar imagens a serviços externos. Não clica ou joga lances automaticamente.
 
 > **Uso responsável:** o Chess.com proíbe assistência de motores em partidas em andamento contra outros jogadores, inclusive em partidas sem rating. O uso da ferramenta cabe ao responsável, para análise de posições próprias, estudo, testes de percepção de tabuleiro e partidas contra bots. Política oficial: https://www.chess.com/legal/fair-play
 
@@ -34,8 +34,49 @@ Depois de instalar, execute `GERAR_EXE_WINDOWS.bat`. O executável fica em **`di
 - **FEN manual**: teste sem navegador — cole uma posição FEN válida e clique em **Analisar FEN digitado**.
 - **Turno manual**: útil em tabuleiros abertos no meio da partida, quando o histórico não está disponível.
 - **Sempre visível**: mantém a janela acima de outras janelas.
-- **Mostrar variante**: escolha **Todas** (com seta na 1ª), **Somente a 1ª**, **Somente a 2ª**, **Somente a 3ª** ou **Alternar 1ª / 2ª / 3ª**. A seta do tabuleiro e o texto acompanham a escolha. A alternância muda a cada 3 segundos entre as variantes disponíveis, sem interromper a busca do motor. Se a variante selecionada ainda não existir, o programa aguarda sem mostrar outra no lugar.
-- **Só tabuleiro (F11)**: reduz a janela ao tabuleiro e mantém a seta do lance selecionado. No modo compacto, use o **botão direito** para escolher variantes e ativar **Sempre visível**. Teclas **1**, **2**, **3**, **A** (alternar) e **T** (todas) também mudam a exibição. **Esc**, **F11** ou **duplo clique** retornam ao painel completo. As preferências de exibição são lembradas.
+- **Mostrar variante**: escolha da **1ª até a 5ª melhor opção**, **Todas** (seta na 1ª) ou a alternância opcional a cada 3 segundos. A busca sempre solicita cinco variantes, independentemente da qualidade do seu último lance; posições com menos de cinco lances legais oferecem menos opções. A seta e o texto acompanham o ranking selecionado. Se a variante ainda não existir, o programa aguarda sem substituir por outra.
+- **Só tabuleiro (F11)**: tabuleiro com cinco seletores laterais visíveis. Clique na opção desejada ou use as teclas **1 a 5**; a seleção permanece até você escolher outra, enquanto o motor aprofunda os resultados. Ao entrar no F11, a alternância é desativada. **Esc**, **F11**, **Voltar** ou **duplo clique** retornam ao painel. Preferências são lembradas.
+
+## Perfil Humanizado (treino)
+
+Escolha **Humanizado (treino)** no seletor de perfil. Ajuste **Nível** de **0 a 19**
+e clique em **Aplicar perfil**; o padrão é **12**. Números maiores representam
+maior força do motor. Esses níveis não são um Elo nem uma classificação humana.
+**Análise máxima** restaura o nível máximo nativo do motor.
+
+O perfil usa o controle nativo **Skill Level** do Stockfish, com busca de até
+**2 segundos** por posição (respeita um limite de tempo ou profundidade menor
+configurado). A sugestão vem do lance final escolhido pelo motor com força
+reduzida, e não é simplesmente a primeira linha da análise. Pode escolher a
+melhor jogada ou uma inferior, conforme a posição e o nível. Não há garantia de
+vitória, reprodução fiel de raciocínio humano ou de evitar detecção/banimentos.
+Referência: [controle de força do Stockfish](https://official-stockfish.github.io/docs/stockfish-wiki/Stockfish-FAQ.html).
+
+**Sugestão humanizada** mostra o lance do perfil, sua continuação quando
+disponível e as **cinco prévias de análise para comparação**, com rolagem.
+Se o lance final não estiver nas cinco linhas recebidas, a interface mostra
+apenas o lance legal, sem inventar avaliação ou continuação. A avaliação vem
+da perspectiva das brancas, como no restante do programa.
+
+No F11, clique em **Lance humanizado** ou pressione **H**. Os seletores **1 a 5**
+continuam mostrando as respectivas variantes de análise; eles não substituem
+a sugestão do perfil. Trocar de perfil ou de posição limpa a sugestão anterior.
+As preferências são salvas. O aplicativo continua sem executar jogadas.
+
+## Ler a tela sem extensão
+
+1. Instale as dependências atualizadas (`python -m pip install -r requirements.txt`), incluindo Pillow.
+2. Deixe o tabuleiro 2D na **posição inicial**, totalmente visível no **monitor principal**, por exemplo no aplicativo Discord. Escolha **Brancas embaixo** ou **Pretas embaixo** no painel.
+3. Escolha **Manual** ou **Automático** ao lado da orientação e clique em **Ler tela…**. A preferência é lembrada. No modo Manual, arraste sobre as 64 casas. No Automático, o programa procura grades 8×8 de cores alternadas no monitor principal, sem reduzir a imagem para localizar os limites em pixels. Se houver várias, use **Outra região**; se não encontrar, selecione Manual.
+4. Confira a **prévia com a grade das 64 casas**. Nos dois modos, ajuste **X, Y, Largura e Altura**, em pixels, e clique em **Atualizar prévia**. Exclua molduras e coordenadas externas. **Iniciar leitura** valida os limites e calibra as peças; **Cancelar** ou **Esc** fecha a prévia. O modo automático localiza a região, mas não dispensa a calibração na posição inicial nem acompanha automaticamente uma janela movida.
+5. O leitor aprende as peças do tema selecionado e acompanha a região a cada 0,7 segundo. Duas imagens consecutivas precisam concordar antes de atualizar a posição. As imagens ficam apenas em memória local.
+6. **Parar** libera novamente a entrada pela extensão. Analisar um FEN manual também para a captura. Enquanto a captura estiver ativa, posições da extensão são ignoradas.
+
+Mantenha o tabuleiro descoberto: janelas sobrepostas, animações, temas 3D, peças pouco distinguíveis e efeitos visuais podem impedir a leitura. Nova posição da janela, zoom, tema ou orientação exigem recalibração na posição inicial. A calibração pressupõe que você preparou a posição inicial; não identifica uma posição arbitrária sem referências. Durante leitura incerta, as sugestões anteriores são retiradas até uma posição estável ser reconhecida. Uma captura iniciada no meio da partida não recupera histórico de roque ou en passant. A integração ainda precisa de validação manual com o tema real do Discord.
+
+O localizador automático exige uma grade 2D completa, de pelo menos 160 pixels de lado, com fundos das casas aproximadamente uniformes e distintos. Temas com texturas, grades parcialmente ocultas ou efeitos intensos podem exigir seleção manual. Encontrar a região não garante reconhecer todas as peças: confira a prévia e a posição reconhecida. Não há garantia de 100% de precisão para qualquer aplicativo ou tema.
+
+A captura usa [Pillow ImageGrab](https://pillow.readthedocs.io/en/stable/reference/ImageGrab.html). Não há mecanismo de ocultação do motor ou garantia de evitar identificação de assistência.
 
 ## Como funciona a leitura
 
@@ -86,6 +127,6 @@ Fontes: https://stockfishchess.org/download/ • https://python-chess.readthedoc
 
 Esta versão corrige o cache de estados de xadrez em posições repetidas, adiciona heartbeat da extensão para identificar desconexões, evita exibir recomendações quando a partida começou no meio com turno incerto e limita a frequência de atualizações da interface. Também existe um mecanismo de detecção opcional por atributos `data-piece`/`data-square` para diferentes componentes de tabuleiro.
 
-**Execute `DIAGNOSTICAR_WINDOWS.bat` antes de usar.** O diagnóstico salva `diagnostico_resultado.txt` e valida: dependências, reconstrução de lances, comunicação local de ponta a ponta e uma busca UCI real com 3 variantes do Stockfish 19. Caso ele falhe, **não considere a instalação concluída**. Para conferir o projeto e os testes manuais recomendados, leia `ARCHITECTURE.md`.
+**Execute `DIAGNOSTICAR_WINDOWS.bat` antes de usar.** O diagnóstico salva `diagnostico_resultado.txt` e valida: dependências, reconstrução de lances, comunicação local de ponta a ponta e uma busca UCI real com 5 variantes do Stockfish 19. Caso ele falhe, **não considere a instalação concluída**. Para conferir o projeto e os testes manuais recomendados, leia `ARCHITECTURE.md`.
 
 Uma execução bem-sucedida dos autotestes ainda não substitui um teste real da interface da Chess.com no seu Windows.

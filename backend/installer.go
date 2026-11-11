@@ -53,7 +53,7 @@ func cleanPythonEnv(env []string) []string {
 
 // Importing tkinter is not enough: it succeeds even if init.tcl is missing.
 const tkinterProbe = "import sys,tkinter as tk,venv,ensurepip; assert sys.version_info >= (3,11); root=tk.Tk();root.withdraw();root.update_idletasks();root.destroy()"
-const venvProbe = "import chess,chess.engine,tkinter as tk; assert hasattr(chess, 'Board'); root=tk.Tk();root.withdraw();root.update_idletasks();root.destroy()"
+const venvProbe = "import chess,chess.engine,tkinter as tk; from PIL import ImageGrab,ImageTk; assert hasattr(chess, 'Board'); root=tk.Tk();root.withdraw();root.update_idletasks();root.destroy()"
 
 func say(format string, args ...any) {
 	s := fmt.Sprintf(format, args...)
@@ -286,15 +286,36 @@ func ensurePython(dest string) (string, error) {
 }
 
 func venvValid(p string) bool {
+	return checkVenv(p) == nil
+}
+
+func checkVenv(p string) error {
 	if _, err := os.Stat(p); err != nil {
-		return false
+		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p, "-c", venvProbe)
 	hideWindow(cmd)
 	cmd.Env = cleanPythonEnv(os.Environ())
-	return cmd.Run() == nil
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("teste do ambiente Python excedeu o tempo: %w", ctx.Err())
+	}
+	if err != nil {
+		return fmt.Errorf("teste do ambiente Python falhou: %w\n%s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func updateVenvDependencies(dest, exe string) error {
+	if err := runCommand(8*time.Minute, dest, exe, "-m", "pip", "install", "--disable-pip-version-check", "-r", filepath.Join(dest, "requirements.txt")); err != nil {
+		return fmt.Errorf("nao foi possivel atualizar as dependencias: %w", err)
+	}
+	if err := checkVenv(exe); err != nil {
+		return fmt.Errorf("dependencias atualizadas, mas a validacao falhou: %w", err)
+	}
+	return nil
 }
 
 func ensureVenv(dest, python string, repair bool) (string, error) {
@@ -302,6 +323,13 @@ func ensureVenv(dest, python string, repair bool) (string, error) {
 	exe := filepath.Join(venv, "Scripts", "python.exe")
 	if !repair && venvValid(exe) {
 		say("Dependencias Python E janela Tk aprovadas. Sem reinstalacao.")
+		return exe, nil
+	}
+	if !repair && pythonValid(exe) {
+		say("Python e Tk funcionam; atualizando dependencias no ambiente existente...")
+		if err := updateVenvDependencies(dest, exe); err != nil {
+			return "", err
+		}
 		return exe, nil
 	}
 	if _, err := os.Stat(venv); err == nil {
@@ -313,13 +341,28 @@ func ensureVenv(dest, python string, repair bool) (string, error) {
 	if err := runCommand(3*time.Minute, dest, python, "-m", "venv", venv); err != nil {
 		return "", err
 	}
-	if err := runCommand(8*time.Minute, dest, exe, "-m", "pip", "install", "--disable-pip-version-check", "-r", filepath.Join(dest, "requirements.txt")); err != nil {
+	if err := updateVenvDependencies(dest, exe); err != nil {
 		return "", err
 	}
-	if !venvValid(exe) {
-		return "", errors.New("ambiente virtual nao conseguiu abrir janela Tk ou carregar python-chess")
-	}
 	return exe, nil
+}
+
+func ensureLaunchVenv(dest string) (string, error) {
+	exe := filepath.Join(dest, ".venv", "Scripts", "python.exe")
+	if err := checkVenv(exe); err == nil {
+		return exe, nil
+	} else {
+		say("Ambiente precisa de atualizacao: %v", err)
+	}
+	// Missing packages do not require recreating a working Python/Tk runtime.
+	if pythonValid(exe) {
+		return ensureVenv(dest, exe, false)
+	}
+	python, err := ensurePython(dest)
+	if err != nil {
+		return "", err
+	}
+	return ensureVenv(dest, python, false)
 }
 
 func findStockfish(dest string) string {
@@ -576,7 +619,7 @@ func run() error {
 		if err := embedExtract(app); err != nil {
 			return err
 		}
-		for _, f := range []string{"app.py", "tracker.py", "variation_view.py", "extension/manifest.json", "diagnostico.py"} {
+		for _, f := range []string{"app.py", "tracker.py", "variation_view.py", "screen_reader.py", "extension/manifest.json", "diagnostico.py"} {
 			if _, err := os.Stat(filepath.Join(app, filepath.FromSlash(f))); err != nil {
 				return err
 			}
@@ -607,8 +650,10 @@ func run() error {
 		if err := embedExtract(dest); err != nil {
 			return fmt.Errorf("nao foi possivel atualizar os arquivos do analisador: %w", err)
 		}
-		py := filepath.Join(dest, ".venv", "Scripts", "python.exe")
-		if !venvValid(py) { return errors.New("ambiente Python invalido; instale ou repare pela central") }
+		py, err := ensureLaunchVenv(dest)
+		if err != nil {
+			return fmt.Errorf("nao foi possivel preparar o ambiente para abrir: %w", err)
+		}
 		return launchApp(dest, py)
 	}
 	if *extension {
@@ -652,18 +697,18 @@ func run() error {
 	}
 	stage(6, "Atalho e extensao Chrome/Edge")
 	if !*admin {
-	saved, err := copySelf(dest)
-	if err != nil {
-		say("Aviso: nao consegui criar copia permanente do instalador: %v", err)
-	}
-	if saved != "" {
-		makeShortcuts(saved, dest)
-	}
-	if firstInstall {
-		openExtensionFolder(dest)
-	} else {
-		say("Extensao ja extraida em: %s", filepath.Join(dest, "extension"))
-	}
+		saved, err := copySelf(dest)
+		if err != nil {
+			say("Aviso: nao consegui criar copia permanente do instalador: %v", err)
+		}
+		if saved != "" {
+			makeShortcuts(saved, dest)
+		}
+		if firstInstall {
+			openExtensionFolder(dest)
+		} else {
+			say("Extensao ja extraida em: %s", filepath.Join(dest, "extension"))
+		}
 	} else {
 		say("Extensao disponivel na central, pasta: %s", filepath.Join(dest, "extension"))
 	}
