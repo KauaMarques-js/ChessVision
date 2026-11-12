@@ -14,6 +14,31 @@ from test_screen_reader import render
 
 
 class InterfaceViewTests(unittest.TestCase):
+    def test_teaching_keeps_both_black_rooks_and_can_clear_mistakes(self):
+        from screen_reader import PIECE_LABELS
+        root=Tk()
+        try:
+            with tempfile.TemporaryDirectory() as temp,patch.object(app,'CONFIG',Path(temp)/'config.json'):
+                ui=app.ChessVisionUI(root,app.AnalysisState())
+                trainer=ui.teach_piece_profile(render(chess.Board(),'black'),'black',lambda reader:None)
+                root.update()
+                for col in (0,7):
+                    ui.teaching_choice.set(PIECE_LABELS['r'])
+                    ui.teaching_canvas.event_generate('<Button-1>',x=col*35+17,y=7*35+17)
+                    root.update()
+                self.assertEqual(len(ui.teaching_reader.templates['r']),2)
+                def find(widget,text):
+                    for child in widget.winfo_children():
+                        if child.winfo_class()=='TButton' and child.cget('text')==text:return child
+                        found=find(child,text)
+                        if found:return found
+                ui.teaching_choice.set(PIECE_LABELS['r'])
+                find(trainer,'Limpar tipo selecionado').invoke()
+                self.assertEqual(ui.teaching_reader.templates['r'],[])
+                find(trainer,'Desfazer').invoke()
+                self.assertEqual(len(ui.teaching_reader.templates['r']),2)
+        finally:root.destroy()
+
     def test_teaching_clicks_undo_and_validation_before_using_profile(self):
         from screen_reader import PIECE_LABELS,square_at
         root=Tk()

@@ -136,7 +136,9 @@ Uma execução bem-sucedida dos autotestes ainda não substitui um teste real da
 
 ## Ensinar o estilo das peças
 
-Na conferência, use **Alinhar grade** para ajustar uma seleção aproximada às bordas observadas. Clique em **Ensinar tema**: escolha o tipo e clique em uma casa que contenha a peça correspondente. Cadastre os 12 tipos (seis brancos e seis pretos) e uma casa vazia; o próximo tipo é selecionado automaticamente. **Desfazer** corrige o último exemplo. Também pode selecionar um tipo novamente para substituir seu exemplo.
+Na conferência, use **Alinhar grade** para ajustar uma seleção aproximada às bordas observadas. Clique em **Ensinar tema**: escolha o tipo e clique em uma casa que contenha a peça correspondente. Cadastre os 12 tipos (seis brancos e seis pretos) e uma casa vazia; o próximo tipo é selecionado automaticamente. Para torres pretas e outros tipos, selecione o tipo novamente e clique em uma peça numa casa de outra cor: os exemplos são somados, sem apagar o anterior. **Desfazer** remove a última alteração; **Limpar tipo selecionado** permite corrigir exemplos com rótulo errado.
+
+Se **Usar perfil** encontrar uma casa incerta, ela aparece destacada e ampliada. Confira o tipo selecionado e clique na casa para adicionar o exemplo correto. O tipo sugerido é apenas o candidato mais próximo, não uma confirmação automática. A leitura tolera pequenos deslocamentos de rasterização sem dispensar os critérios de confiança ou aceitar peças indistinguíveis. Perfis foreground-ink-v2 já salvos continuam compatíveis.
 
 **Importar casa…** permite fornecer o recorte de uma casa inteira (PNG, JPEG ou WebP), com peça e margens, útil quando um tipo já foi capturado na partida. Use o mesmo estilo e enquadramento. Não importe uma folha com várias peças. Dê um nome ao perfil e clique em **Usar perfil**. O programa exige todos os exemplos e uma posição reconhecida válida. Confira **Peças lidas**, a vez e os roques, depois **Confirmar e continuar**. Só essa confirmação salva o perfil e retoma a leitura.
 

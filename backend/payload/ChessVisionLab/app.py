@@ -1320,7 +1320,7 @@ class ChessVisionUI:
 
     def teach_piece_profile(self,crop,orientation,on_ready,parent=None):
         from PIL import Image,ImageTk
-        from screen_reader import ScreenBoardReader,PIECE_LABELS,square_at
+        from screen_reader import ScreenBoardReader,PIECE_LABELS,square_at,UncertainSquareError
         parent=parent or self.root
         trainer=tk.Toplevel(parent)
         trainer.title('Ensinar estilo das peças')
@@ -1329,7 +1329,7 @@ class ChessVisionUI:
         panel=ttk.Frame(trainer,padding=8)
         panel.pack(fill='both',expand=True)
         ttk.Label(panel,text='Escolha o tipo e clique na casa que mostra essa peça.',wraplength=380).pack(anchor='w')
-        ttk.Label(panel,text='São 12 tipos de peça + casa vazia. O próximo tipo é selecionado automaticamente.',
+        ttk.Label(panel,text='São 12 tipos + casa vazia. Para torres e outras peças, adicione exemplos em casas claras e escuras.',
                   style='Hint.TLabel',wraplength=380).pack(anchor='w',pady=3)
         name=StringVar(value='Meu tema')
         namerow=ttk.Frame(panel);namerow.pack(fill='x',pady=3)
@@ -1341,8 +1341,11 @@ class ChessVisionUI:
         self.teaching_choice=choice
         reader=ScreenBoardReader.new_profile(crop.size,orientation)
         self.teaching_reader=reader
-        canvas=Canvas(panel,width=280,height=280,highlightthickness=0,bg='#111723')
-        canvas.pack(pady=4)
+        image_row=ttk.Frame(panel);image_row.pack(fill='x',pady=4)
+        canvas=Canvas(image_row,width=280,height=280,highlightthickness=0,bg='#111723')
+        canvas.pack(side='left')
+        detail=Canvas(image_row,width=72,height=72,highlightthickness=0,bg='#111723')
+        detail.pack(side='left',anchor='n',padx=(5,0))
         self.teaching_canvas=canvas
         thumbnail=crop.copy();thumbnail.thumbnail((280,280))
         photo=ImageTk.PhotoImage(thumbnail)
@@ -1368,16 +1371,20 @@ class ChessVisionUI:
 
         def register(symbol,tile,location):
             previous=list(reader.templates[symbol])
-            # Re-teaching a type replaces a mistaken example, rather than
-            # keeping a contaminated nearest-neighbour reference forever.
-            reader.templates[symbol]=[]
-            try:reader.add_tile(symbol,tile)
-            except ValueError:
-                reader.templates[symbol]=previous
-                raise
+            reader.add_tile(symbol,tile)
             undo.append((symbol,previous))
-            status.set(f'{PIECE_LABELS[symbol]} cadastrado: {location}.')
+            status.set(f'{PIECE_LABELS[symbol]}: {len(reader.templates[symbol])} exemplo(s), último: {location}.')
             refresh()
+
+        def show_square(row,col):
+            tile=crop.crop((round(col*crop.width/8),round(row*crop.height/8),
+                            round((col+1)*crop.width/8),round((row+1)*crop.height/8)))
+            detail.image=ImageTk.PhotoImage(tile.resize((72,72),Image.Resampling.LANCZOS))
+            detail.delete('all');detail.create_image(0,0,image=detail.image,anchor='nw')
+            canvas.delete('selected')
+            canvas.create_rectangle(col*thumbnail.width/8,row*thumbnail.height/8,
+                (col+1)*thumbnail.width/8,(row+1)*thumbnail.height/8,outline='#ffcc55',width=3,tags='selected')
+            return tile
 
         def click(event):
             col=int(event.x*8/thumbnail.width);row=int(event.y*8/thumbnail.height)
@@ -1387,12 +1394,9 @@ class ChessVisionUI:
             if cell==last_click[0] and now-last_click[1]<.35:return
             last_click[:]=[cell,now]
             symbol=selected_symbol()
-            tile=crop.crop((round(col*crop.width/8),round(row*crop.height/8),
-                            round((col+1)*crop.width/8),round((row+1)*crop.height/8)))
-            register(symbol,tile,chess.square_name(square_at(row,col,orientation)))
-            canvas.delete('selected')
-            canvas.create_rectangle(col*thumbnail.width/8,row*thumbnail.height/8,
-                (col+1)*thumbnail.width/8,(row+1)*thumbnail.height/8,outline='#ffcc55',width=3,tags='selected')
+            tile=show_square(row,col)
+            try:register(symbol,tile,chess.square_name(square_at(row,col,orientation)))
+            except ValueError as exc:status.set(str(exc))
 
         def undo_last():
             if not undo:return
@@ -1400,6 +1404,15 @@ class ChessVisionUI:
             reader.templates[symbol]=previous
             refresh();choice.set(PIECE_LABELS[symbol])
             status.set('Exemplo desfeito. Clique novamente na peça correta.')
+
+        def clear_type():
+            symbol=selected_symbol()
+            previous=list(reader.templates[symbol])
+            if previous:
+                undo.append((symbol,previous))
+                reader.templates[symbol]=[]
+            refresh();choice.set(PIECE_LABELS[symbol])
+            status.set('Exemplos desse tipo removidos. Clique na peça correta.')
 
         def import_tile():
             filename=filedialog.askopenfilename(parent=trainer,title='Escolha a imagem de uma casa inteira',
@@ -1420,6 +1433,12 @@ class ChessVisionUI:
                 reader.profile_name=name.get().strip()[:80] or 'Meu tema'
                 placement=reader.read(crop)
                 self.state.preview_screen_position(placement)
+            except UncertainSquareError as exc:
+                show_square(exc.row,exc.col)
+                choice.set(PIECE_LABELS[exc.symbol])
+                square=chess.square_name(square_at(exc.row,exc.col,orientation))
+                status.set(f'Confira {square} destacada. Escolha o tipo correto e clique nela para adicionar outro exemplo; depois use o perfil.')
+                return
             except ValueError as exc:
                 status.set('Revise os exemplos: '+str(exc))
                 return
@@ -1432,6 +1451,8 @@ class ChessVisionUI:
         ttk.Button(actions,text='Desfazer',command=undo_last).pack(side='left',padx=3)
         ttk.Button(actions,text='Usar perfil',command=use).pack(side='right')
         ttk.Button(actions,text='Cancelar',command=close).pack(side='right',padx=3)
+        correction=ttk.Frame(panel);correction.pack(fill='x')
+        ttk.Button(correction,text='Limpar tipo selecionado',command=clear_type).pack(side='left')
         refresh()
         trainer.protocol('WM_DELETE_WINDOW',close)
         trainer.bind('<Escape>',lambda _:close())

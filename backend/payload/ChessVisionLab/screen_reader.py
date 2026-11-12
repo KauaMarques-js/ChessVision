@@ -11,6 +11,15 @@ PIECE_LABELS={'.':'Casa vazia','P':'Peão branco','N':'Cavalo branco','B':'Bispo
               'n':'Cavalo preto','b':'Bispo preto','r':'Torre preta','q':'Dama preta','k':'Rei preto'}
 
 
+class UncertainSquareError(ValueError):
+    def __init__(self,row,col,orientation,matches):
+        self.row,self.col=row,col
+        self.matches=matches
+        self.symbol=matches[0][1]
+        square=chess.square_name(square_at(row,col,orientation))
+        super().__init__(f'Casa {square}: peça incerta. Aguarde a área ficar visível.')
+
+
 def outside_position(bbox, window_size, screen_size, margin=12):
     """Place the viewer outside the source without resizing its board."""
     left,top,right,bottom=bbox
@@ -267,6 +276,25 @@ class ScreenBoardReader:
     def _distance(a, b):
         return sum(ImageStat.Stat(ImageChops.difference(a, b)).mean)/3
 
+    @staticmethod
+    def _uncertain(matches):
+        distance,runner_up=matches[0][0],matches[1][0]
+        return distance>12 or runner_up-distance<1.2 or (distance>10 and runner_up<distance*1.8)
+
+    def _matches(self,tile):
+        matches=sorted((min(self._distance(tile,t) for t in templates),symbol)
+                       for symbol,templates in self.templates.items())
+        if self._uncertain(matches):
+            # Subpixel rasterization and slightly offset crops can move an
+            # outline by one normalized pixel. Compare every class with the
+            # same bounded shifts, retaining the confidence/margin checks.
+            shifted=[ImageChops.offset(tile,dx,dy) for dx,dy in
+                     ((-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1))]
+            matches=sorted((min(distance,min(self._distance(other,t)
+                           for other in shifted for t in self.templates[symbol])),symbol)
+                           for distance,symbol in matches)
+        return matches
+
     def read(self, image):
         if self.missing_symbols:
             missing=', '.join(PIECE_LABELS[symbol] for symbol in self.missing_symbols)
@@ -277,14 +305,12 @@ class ScreenBoardReader:
         for row in range(8):
             for col in range(8):
                 tile = self._tile(image, row, col)
-                matches = sorted((min(self._distance(tile, t) for t in templates), symbol)
-                                 for symbol, templates in self.templates.items())
+                matches = self._matches(tile)
                 (distance, symbol), (runner_up, _) = matches[:2]
                 # Small light/dark-square variation is accepted only when the
                 # winning piece remains well separated from the runner-up.
-                if distance>12 or runner_up-distance<1.2 or (distance>10 and runner_up<distance*1.8):
-                    square=chess.square_name(square_at(row,col,self.orientation))
-                    raise ValueError(f'Casa {square}: peça incerta. Aguarde a área ficar visível.')
+                if self._uncertain(matches):
+                    raise UncertainSquareError(row,col,self.orientation,matches[:2])
                 if symbol != '.':
                     board.set_piece_at(square_at(row, col, self.orientation), chess.Piece.from_symbol(symbol))
         if len(board.pieces(chess.KING, chess.WHITE)) != 1 or len(board.pieces(chess.KING, chess.BLACK)) != 1:

@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import chess
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageChops
 
 import app
 from screen_reader import ScreenBoardReader, square_at, detect_boards, outside_position, refine_board_region
@@ -31,6 +31,23 @@ def render(board, orientation='white', highlight=None, highlights=None):
 
 
 class ScreenReaderTests(unittest.TestCase):
+    def test_black_rooks_keep_identity_with_small_raster_offsets(self):
+        board=chess.Board();board.push_san('e4')
+        image=render(board,'black')
+        reader=ScreenBoardReader.new_profile(image.size,'black')
+        for row in range(8):
+            for col in range(8):
+                piece=board.piece_at(square_at(row,col,'black'))
+                symbol=piece.symbol() if piece else '.'
+                if symbol in reader.missing_symbols:reader.add_example(image,row,col,symbol)
+        for dx,dy in ((2,0),(-2,0),(0,2),(0,-2)):
+            shifted=image.copy()
+            for col in (0,7):
+                tile=image.crop((col*60,420,(col+1)*60,480))
+                shifted.paste(ImageChops.offset(tile,dx,dy),(col*60,420))
+            with self.subTest(offset=(dx,dy)):
+                self.assertEqual(reader.read(shifted),board.board_fen())
+
     def test_manual_examples_learn_midgame_without_initial_position(self):
         board=chess.Board()
         for move in ('e4','d5','Nc3','Nf6'):board.push_san(move)
