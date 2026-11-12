@@ -479,9 +479,9 @@ class ChessVisionUI:
         from screen_reader import ScreenBoardReader
         try:
             self.screen_reader=ScreenBoardReader.load(CONFIG.with_name('.reader_templates.json'))
-            self.reader_cache_message='Referências salvas disponíveis para retomar no meio da partida.'
+            self.reader_cache_message=f'Perfil {self.screen_reader.profile_name} disponível para retomar a partida.'
         except (OSError,ValueError,TypeError,KeyError):
-            self.reader_cache_message='Primeiro uso deste tema: calibre uma vez na posição inicial.'
+            self.reader_cache_message='Use Ensinar tema na conferência para cadastrar as peças, ou calibre na posição inicial.'
         root.title('ChessVision Lab • Stockfish 19')
         root.geometry(self.normal_geometry)
         root.minsize(*self.normal_minsize)
@@ -982,8 +982,14 @@ class ChessVisionUI:
         self.state.pause_screen('Procurando o jogo; aguardando confirmação antes de analisar.')
         self.screen_status.set('Procurando tabuleiro em segundo plano… Abra a janela do jogo.')
         self.root.title('ChessVision Lab • Procurando jogo em segundo plano')
-        self.root.iconify()
-        self.search_exclusions=[]
+        self.set_board_only(True)
+        self.root.deiconify()
+        self.root.update_idletasks()
+        width=self.root.winfo_screenwidth()
+        self.root.geometry(f'{self.CELL*8}x{self.COMPACT_HEIGHT}+{max(0,width-self.CELL*8-24)}+12')
+        self.root.update_idletasks()
+        x,y=self.root.winfo_rootx(),self.root.winfo_rooty()
+        self.search_exclusions=[(x,y,x+self.root.winfo_width(),y+self.root.winfo_height())]
         threading.Thread(target=self.search_game,args=(self.capture_generation,self.search_stop),daemon=True).start()
 
     def search_game(self,generation,stop):
@@ -991,8 +997,10 @@ class ChessVisionUI:
         from screen_reader import detect_boards
         previous=None
         last_status=None
+        attempts=0
         while not stop.is_set() and not self.state.shutdown.is_set():
             try:
+                attempts+=1
                 photo=ImageGrab.grab()
                 candidates=detect_boards(photo,tuple(self.search_exclusions))
                 verified=[]
@@ -1002,21 +1010,19 @@ class ChessVisionUI:
                         try:
                             reader=self.screen_reader.for_region((bbox[2]-bbox[0],bbox[3]-bbox[1]))
                             placement=reader.read(photo.crop(bbox))
-                        except ValueError:
-                            try:
-                                from screen_reader import ScreenBoardReader
-                                initial=ScreenBoardReader(photo.crop(bbox),self.screen_reader.orientation)
-                                placement=initial.read(photo.crop(bbox))
-                            except ValueError:continue
+                        except ValueError:pass
                     verified.append((bbox,placement))
-                signature=tuple(verified)
+                # Locating an 8x8 grid must not require already knowing its
+                # pieces: unknown styles are taught in the confirmation UI.
+                signature=tuple(item[0] for item in verified)
                 if signature and signature==previous:
                     if not stop.is_set():
                         stop.set()
                         self.state.ui_events.put(('search_ready',generation,photo,[item[0] for item in verified]))
                     return
                 previous=signature or None
-                status='Tabuleiro candidato encontrado; aguardando imagem estável…' if verified else 'Procurando jogo em segundo plano; mantenha o tabuleiro visível.'
+                status=(f'Busca {attempts}: grade encontrada; preparando conferência das peças.' if verified
+                        else f'Busca {attempts}: aguardando tabuleiro visível. Mova o painel se estiver por cima do jogo.')
             except (OSError,ValueError) as exc:
                 previous=None
                 status=f'Busca continua aguardando uma imagem legível: {exc}'
@@ -1093,8 +1099,12 @@ class ChessVisionUI:
         frame.pack(fill='both',expand=True)
         ttk.Label(frame,text='Confira a imagem e as peças lidas antes de confirmar.').pack(anchor='w')
         ttk.Label(frame,text='Tema conhecido permite retomar no meio da partida.',style='Hint.TLabel').pack(anchor='w')
-        candidate_label=ttk.Label(frame)
-        candidate_label.pack(anchor='w',pady=4)
+        regionrow=ttk.Frame(frame)
+        regionrow.pack(fill='x',pady=3)
+        candidate_label=ttk.Label(regionrow)
+        candidate_label.pack(side='left')
+        ttk.Button(regionrow,text='Ensinar tema',command=lambda:teach()).pack(side='right')
+        ttk.Button(regionrow,text='Alinhar grade',command=lambda:align_region()).pack(side='right',padx=3)
         controls=ttk.Frame(frame)
         controls.pack(fill='x',pady=5)
         bounds=[IntVar() for _ in range(4)]
@@ -1138,26 +1148,33 @@ class ChessVisionUI:
         ttk.Label(frame,textvariable=warning,wraplength=390).pack(anchor='w')
         current=[0]
         recognized={'reader':None,'placement':None,'orientation':None}
+        taught=[None]
 
         def recognize(crop):
             from screen_reader import ScreenBoardReader
             orientation='black' if preview_orientation.get()=='Pretas embaixo' else 'white'
             reader=None
             error=None
-            if self.screen_reader is not None:
+            reference=taught[0] or self.screen_reader
+            if reference is not None:
                 try:
-                    reader=self.screen_reader.for_region(crop.size,orientation)
+                    reader=reference.for_region(crop.size,orientation)
                     placement=reader.read(crop)
                 except ValueError as exc:reader=None;error=exc
-            if reader is None:
+            if reader is None and taught[0] is None:
                 try:
                     reader=ScreenBoardReader(crop,orientation)
                     placement=reader.read(crop)
                 except ValueError as exc:
                     recognized['reader']=None
                     pieces.delete('all')
-                    warning.set('Não identifiquei as peças. Em tema novo, calibre na posição inicial. '+str(error or exc))
+                    warning.set('Peças ainda não identificadas. Use Ensinar tema para cadastrar exemplos. '+str(error or exc))
                     return
+            if reader is None:
+                recognized['reader']=None
+                pieces.delete('all')
+                warning.set('O perfil precisa de outro exemplo: '+str(error))
+                return
             snapshot=self.state.preview_screen_position(placement)
             changed=placement!=recognized['placement'] or orientation!=recognized['orientation']
             first=recognized['placement'] is None
@@ -1216,9 +1233,32 @@ class ChessVisionUI:
         def choose(index):
             current[0]=index % len(candidates)
             left,top,right,bottom=candidates[current[0]]
+            from screen_reader import refine_board_region
+            left,top,right,bottom=refine_board_region(photo_source[0],(left,top,right,bottom))
             for var,value in zip(bounds,(left,top,right-left,bottom-top)):var.set(value)
             candidate_label.configure(text=f'Região {current[0]+1} de {len(candidates)}')
             update_preview()
+
+        def align_region():
+            bbox=update_preview()
+            if bbox is None:return None
+            from screen_reader import refine_board_region
+            aligned=refine_board_region(photo_source[0],bbox)
+            left,top,right,bottom=aligned
+            for var,value in zip(bounds,(left,top,right-left,bottom-top)):var.set(value)
+            update_preview()
+            return aligned
+
+        def teach():
+            bbox=align_region()
+            if bbox is None:return
+            crop=photo_source[0].crop(bbox)
+            orientation='black' if preview_orientation.get()=='Pretas embaixo' else 'white'
+            def accept(reader):
+                taught[0]=reader
+                update_preview()
+                views.select(pieces)
+            self.teach_piece_profile(crop,orientation,accept,parent=dialog)
 
         def start():
             bbox=update_preview()
@@ -1278,6 +1318,126 @@ class ChessVisionUI:
         dialog.grab_set()
         return dialog
 
+    def teach_piece_profile(self,crop,orientation,on_ready,parent=None):
+        from PIL import Image,ImageTk
+        from screen_reader import ScreenBoardReader,PIECE_LABELS,square_at
+        parent=parent or self.root
+        trainer=tk.Toplevel(parent)
+        trainer.title('Ensinar estilo das peças')
+        trainer.transient(parent)
+        trainer.resizable(False,False)
+        panel=ttk.Frame(trainer,padding=8)
+        panel.pack(fill='both',expand=True)
+        ttk.Label(panel,text='Escolha o tipo e clique na casa que mostra essa peça.',wraplength=380).pack(anchor='w')
+        ttk.Label(panel,text='São 12 tipos de peça + casa vazia. O próximo tipo é selecionado automaticamente.',
+                  style='Hint.TLabel',wraplength=380).pack(anchor='w',pady=3)
+        name=StringVar(value='Meu tema')
+        namerow=ttk.Frame(panel);namerow.pack(fill='x',pady=3)
+        ttk.Label(namerow,text='Perfil:').pack(side='left')
+        ttk.Entry(namerow,textvariable=name,width=25).pack(side='left',padx=4)
+        choice=StringVar(value=PIECE_LABELS['.'])
+        palette=ttk.Combobox(panel,textvariable=choice,values=list(PIECE_LABELS.values()),state='readonly',width=27)
+        palette.pack(anchor='w',pady=3)
+        self.teaching_choice=choice
+        reader=ScreenBoardReader.new_profile(crop.size,orientation)
+        self.teaching_reader=reader
+        canvas=Canvas(panel,width=280,height=280,highlightthickness=0,bg='#111723')
+        canvas.pack(pady=4)
+        self.teaching_canvas=canvas
+        thumbnail=crop.copy();thumbnail.thumbnail((280,280))
+        photo=ImageTk.PhotoImage(thumbnail)
+        canvas.image=photo
+        canvas.create_image(0,0,image=photo,anchor='nw')
+        for n in range(9):
+            canvas.create_line(n*thumbnail.width/8,0,n*thumbnail.width/8,thumbnail.height,fill='#00d9a3')
+            canvas.create_line(0,n*thumbnail.height/8,thumbnail.width,n*thumbnail.height/8,fill='#00d9a3')
+        progress=StringVar()
+        ttk.Label(panel,textvariable=progress,wraplength=380).pack(anchor='w')
+        status=StringVar(value='Comece clicando em uma casa vazia.')
+        ttk.Label(panel,textvariable=status,style='Hint.TLabel',wraplength=380).pack(anchor='w',pady=3)
+        undo=[]
+        last_click=[None,0.0]
+
+        def refresh():
+            missing=reader.missing_symbols
+            progress.set(f'{13-len(missing)}/13 tipos cadastrados'+(' • próximo: '+PIECE_LABELS[missing[0]] if missing else ' • pronto para conferir'))
+            if missing:choice.set(PIECE_LABELS[missing[0]])
+
+        def selected_symbol():
+            return next(symbol for symbol,label in PIECE_LABELS.items() if label==choice.get())
+
+        def register(symbol,tile,location):
+            previous=list(reader.templates[symbol])
+            # Re-teaching a type replaces a mistaken example, rather than
+            # keeping a contaminated nearest-neighbour reference forever.
+            reader.templates[symbol]=[]
+            try:reader.add_tile(symbol,tile)
+            except ValueError:
+                reader.templates[symbol]=previous
+                raise
+            undo.append((symbol,previous))
+            status.set(f'{PIECE_LABELS[symbol]} cadastrado: {location}.')
+            refresh()
+
+        def click(event):
+            col=int(event.x*8/thumbnail.width);row=int(event.y*8/thumbnail.height)
+            if not 0<=row<8 or not 0<=col<8:return
+            cell=(row,col)
+            now=time.monotonic()
+            if cell==last_click[0] and now-last_click[1]<.35:return
+            last_click[:]=[cell,now]
+            symbol=selected_symbol()
+            tile=crop.crop((round(col*crop.width/8),round(row*crop.height/8),
+                            round((col+1)*crop.width/8),round((row+1)*crop.height/8)))
+            register(symbol,tile,chess.square_name(square_at(row,col,orientation)))
+            canvas.delete('selected')
+            canvas.create_rectangle(col*thumbnail.width/8,row*thumbnail.height/8,
+                (col+1)*thumbnail.width/8,(row+1)*thumbnail.height/8,outline='#ffcc55',width=3,tags='selected')
+
+        def undo_last():
+            if not undo:return
+            symbol,previous=undo.pop()
+            reader.templates[symbol]=previous
+            refresh();choice.set(PIECE_LABELS[symbol])
+            status.set('Exemplo desfeito. Clique novamente na peça correta.')
+
+        def import_tile():
+            filename=filedialog.askopenfilename(parent=trainer,title='Escolha a imagem de uma casa inteira',
+                filetypes=[('Imagens','*.png *.jpg *.jpeg *.webp'),('Todos','*.*')])
+            if not filename:return
+            try:
+                with Image.open(filename) as image:
+                    if max(image.size)>2048:raise ValueError('Importe o recorte de uma casa, com a peça e suas margens.')
+                    register(selected_symbol(),image.copy(),'imagem importada')
+            except (OSError,ValueError) as exc:status.set(str(exc))
+
+        def close():
+            trainer.destroy()
+            if parent.winfo_exists():parent.grab_set()
+
+        def use():
+            try:
+                reader.profile_name=name.get().strip()[:80] or 'Meu tema'
+                placement=reader.read(crop)
+                self.state.preview_screen_position(placement)
+            except ValueError as exc:
+                status.set('Revise os exemplos: '+str(exc))
+                return
+            close()
+            on_ready(reader)
+
+        canvas.bind('<Button-1>',click)
+        actions=ttk.Frame(panel);actions.pack(fill='x',pady=4)
+        ttk.Button(actions,text='Importar casa…',command=import_tile).pack(side='left')
+        ttk.Button(actions,text='Desfazer',command=undo_last).pack(side='left',padx=3)
+        ttk.Button(actions,text='Usar perfil',command=use).pack(side='right')
+        ttk.Button(actions,text='Cancelar',command=close).pack(side='right',padx=3)
+        refresh()
+        trainer.protocol('WM_DELETE_WINDOW',close)
+        trainer.bind('<Escape>',lambda _:close())
+        trainer.grab_set()
+        return trainer
+
     def start_screen_capture(self, reader, bbox, confirmation=None):
         self.screen_reader=reader
         self.screen_bbox=bbox
@@ -1296,7 +1456,7 @@ class ChessVisionUI:
                 self.state.ui_events.put(('clear', self.state.revision))
         try:
             reader.save(CONFIG.with_name('.reader_templates.json'))
-            self.cache_status.set('Referências salvas. É possível retomar no meio da partida neste tema.')
+            self.cache_status.set(f'Perfil {reader.profile_name} salvo. Pode retomar no meio da partida neste tema.')
         except OSError:self.cache_status.set('Referências disponíveis só nesta sessão; não foi possível salvar.')
         self.screen_status.set('Captura ativa: mantenha o tabuleiro visível.')
         self.dock_capture_window(bbox)

@@ -7,7 +7,7 @@ import chess
 from PIL import Image, ImageDraw, ImageFont
 
 import app
-from screen_reader import ScreenBoardReader, square_at, detect_boards, outside_position
+from screen_reader import ScreenBoardReader, square_at, detect_boards, outside_position, refine_board_region
 
 
 def render(board, orientation='white', highlight=None, highlights=None):
@@ -31,6 +31,55 @@ def render(board, orientation='white', highlight=None, highlights=None):
 
 
 class ScreenReaderTests(unittest.TestCase):
+    def test_manual_examples_learn_midgame_without_initial_position(self):
+        board=chess.Board()
+        for move in ('e4','d5','Nc3','Nf6'):board.push_san(move)
+        for orientation in ('white','black'):
+            image=render(board,orientation)
+            reader=ScreenBoardReader.new_profile(image.size,orientation,'Meu estilo')
+            with self.assertRaisesRegex(ValueError,'incompleto'):reader.read(image)
+            with tempfile.TemporaryDirectory() as temp:
+                path=Path(temp)/'profile.json'
+                with self.assertRaises(ValueError):reader.save(path)
+                for row in range(8):
+                    for col in range(8):
+                        piece=board.piece_at(square_at(row,col,orientation))
+                        symbol=piece.symbol() if piece else '.'
+                        if symbol in reader.missing_symbols:reader.add_example(image,row,col,symbol)
+                self.assertEqual(reader.missing_symbols,[])
+                self.assertEqual(reader.read(image),board.board_fen())
+                reader.save(path)
+                loaded=ScreenBoardReader.load(path)
+                self.assertEqual(loaded.profile_name,'Meu estilo')
+                self.assertEqual(loaded.read(image),board.board_fen())
+
+    def test_manual_rectangle_snaps_to_grid_and_preserves_unknown_regions(self):
+        image=Image.new('RGB',(900,650),'#202433')
+        image.paste(render(chess.Board()),(113,79))
+        self.assertEqual(refine_board_region(image,(108,76,596,562)),(113,79,593,559))
+        self.assertEqual(refine_board_region(image,(650,20,850,220)),(650,20,850,220))
+
+    def test_unknown_piece_style_still_opens_background_confirmation(self):
+        image=Image.new('RGB',(700,600),'#202433')
+        image.paste(render(chess.Board()),(17,23))
+        ui=app.ChessVisionUI.__new__(app.ChessVisionUI)
+        ui.state=app.AnalysisState()
+        ui.screen_reader=ScreenBoardReader.new_profile((480,480))
+        ui.search_exclusions=[]
+        class Stop:
+            count=0
+            stopped=False
+            def is_set(self):return self.stopped or self.count>=4
+            def set(self):self.stopped=True
+            def wait(self,_):self.count+=1
+        with patch('PIL.ImageGrab.grab',return_value=image):ui.search_game(12,Stop())
+        events=[]
+        while not ui.state.ui_events.empty():events.append(ui.state.ui_events.get_nowait())
+        ready=[event for event in events if event[0]=='search_ready']
+        self.assertEqual(len(ready),1)
+        self.assertEqual(ready[0][3],[(17,23,497,503)])
+        self.assertIsNone(ui.state.board)
+
     def test_repeated_lost_frames_request_background_relocation(self):
         ui=app.ChessVisionUI.__new__(app.ChessVisionUI)
         ui.state=app.AnalysisState()

@@ -78,3 +78,17 @@ PASSOU: 5 testes Go do backend, build Vite, helper recompilado, hashes conferido
 PASSOU: revisão visual das telas de leitura e confirmação, em artifacts/background-reading.png e artifacts/midgame-confirmation.png na raiz do workspace; reconhecimento de posição renderizada pelo Canvas Tk no meio da partida.
 LIMITES: tema desconhecido ainda precisa de calibração inicial; referências salvas permitem retomar posições atuais do mesmo tema. O jogo precisa estar visível no monitor principal. A imagem isolada não recupera en passant, contadores ou repetições anteriores; turno e roques desconhecidos exigem confirmação.
 NÃO EXECUTADO: substituir/reiniciar a partida pessoal ativa para testar ao vivo; instalador atualizado disponível para o usuário.
+
+Atualização 2026-11-12 — ensinar tema e destravar busca automática
+IMPLEMENTADO: Ensinar tema na conferência, com 12 tipos de peça + casa vazia, nome de perfil, seleção automática do próximo tipo, correção por substituição/Desfazer e importação do recorte de uma casa. Usar perfil exige exemplos completos e uma posição válida; só Confirmar e continuar salva as referências e retoma a análise.
+CORRIGIDO: busca automática mantém painel compacto visível com tentativas/progresso. Uma grade estável abre a conferência mesmo com peças desconhecidas, em vez de descartar o candidato indefinidamente. Continua excluindo as janelas do próprio ChessVision.
+CORRIGIDO: Alinhar grade ajusta seleção aproximada às bordas observadas; nova máscara RGB preserva os traços das peças independentemente do fundo. Formato foreground-ink-v2 exige ensinar novamente ou recalibrar perfis anteriores.
+PASSOU: 42 testes Python, incluindo cadastro no meio da partida nas duas orientações, persistência, perfis incompletos, alinhamento, busca com tema desconhecido e fluxo Tk com cliques/Desfazer/validação antes de usar.
+PASSOU: 5 testes Go e 4 testes Node do gerenciador.
+PASSOU: build Vite, helper atualizado no payload e no pacote com SHA256 idêntico (7E2BC24D095BFB74D6F66887D3AEDAC9ED6E0218D5ABF53A9C1070E62596EF83), self-test empacotado e instalador NSIS x64 concluído. Arquivo em release/ChessVision-Manager-Setup-1.0.0-x64.exe.
+PASSOU: reprodução externa com SVGs oficiais cburnett do Lichess, renderizados em imagem 744x744, com realces de último lance. Um exemplo de cada um dos 13 tipos reconheceu exatamente rnbqkb1r/ppp1pppp/5n2/3p4/4P3/2N5/PPPP1PPP/R1BQKBNR. Seleção (560,143)-(1312,893) alinhada para (565,146)-(1309,890).
+PASSOU: calibração automática na imagem inicial oficial cburnett também reconheceu a mesma posição intermediária, sem cadastro manual.
+PASSOU: revisão visual de artifacts/teach-profile.png (371x494) e artifacts/teach-review.png no workspace externo. Nenhuma captura pessoal ou SVG de teste foi incluído no payload/Git.
+FONTE DA FIXTURE EXTERNA: https://github.com/lichess-org/lila/tree/master/public/piece/cburnett ; autoria Colin M. L. Burnett, GPLv2+, conforme https://github.com/lichess-org/lila/blob/master/COPYING.md . Assets utilizados apenas no teste externo, sem distribuição no instalador.
+LIMITES: comparação local de exemplos, sem rede neural e sem garantia para todo tema. Jogo precisa estar visível no monitor principal. Tipos ausentes da partida precisam de recorte do mesmo estilo. Apenas o último perfil confirmado fica salvo.
+NÃO EXECUTADO: teste da nova versão na partida pessoal em andamento ou instalação NSIS sobre a instalação pessoal. Testes da posição cburnett usaram imagem gerada; não equivalem a validação contínua no navegador do usuário.

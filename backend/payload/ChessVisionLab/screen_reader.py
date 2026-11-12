@@ -6,6 +6,10 @@ import json
 from PIL import Image, ImageChops, ImageStat, ImageDraw
 import chess
 
+PIECE_LABELS={'.':'Casa vazia','P':'Peão branco','N':'Cavalo branco','B':'Bispo branco',
+              'R':'Torre branca','Q':'Dama branca','K':'Rei branco','p':'Peão preto',
+              'n':'Cavalo preto','b':'Bispo preto','r':'Torre preta','q':'Dama preta','k':'Rei preto'}
+
 
 def outside_position(bbox, window_size, screen_size, margin=12):
     """Place the viewer outside the source without resizing its board."""
@@ -104,24 +108,40 @@ def detect_boards(image, excluded_regions=()):
     return valid
 
 
+def refine_board_region(image,bbox):
+    """Snap a slightly padded/manual rectangle to the observed grid edges."""
+    left,top,right,bottom=bbox
+    margin=max(12,round(min(right-left,bottom-top)/24))
+    region=(max(0,left-margin),max(0,top-margin),min(image.width,right+margin),min(image.height,bottom+margin))
+    if region[2]<=region[0] or region[3]<=region[1]:return bbox
+    matches=[]
+    for x,y,r,b in detect_boards(image.crop(region)):
+        candidate=(x+region[0],y+region[1],r+region[0],b+region[1])
+        if all(abs(a-z)<=margin*2 for a,z in zip(candidate,bbox)):
+            matches.append(candidate)
+    return min(matches,key=lambda candidate:sum(abs(a-b) for a,b in zip(candidate,bbox))) if matches else bbox
+
+
 def square_at(row, col, orientation):
     return chess.square(7-col if orientation == 'black' else col,
                         row if orientation == 'black' else 7-row)
 
 
 def feature(tile):
-    # Separate light/dark foreground contrast from the square's hue. This
-    # preserves piece outlines when last-move highlights change the background.
-    tile = tile.convert('L').resize((32, 32), Image.Resampling.LANCZOS)
+    # Preserve absolute foreground ink, masking the background. SVG pieces may
+    # contain grey strokes whose polarity changes on light versus dark squares.
+    if 'A' in tile.getbands() or 'transparency' in tile.info:
+        rgba=tile.convert('RGBA')
+        tile=Image.alpha_composite(Image.new('RGBA',rgba.size,(160,160,160,255)),rgba)
+    tile = tile.convert('RGB').resize((32, 32), Image.Resampling.LANCZOS)
     corners = [tile.getpixel(p) for p in ((2, 2), (29, 2), (2, 29), (29, 29))]
-    bg = Image.new('L',tile.size,sorted(corners)[2])
-    positive=ImageChops.subtract(tile,bg).crop((3,3,29,29))
-    negative=ImageChops.subtract(bg,tile).crop((3,3,29,29))
-    def normalize(channel):
-        amplitude=max(16,channel.getextrema()[1])
-        return channel.point(lambda value:round(value*255/amplitude))
-    positive,negative=normalize(positive),normalize(negative)
-    return Image.merge('RGB',(positive,negative,ImageChops.lighter(positive,negative)))
+    background=tuple(sorted(pixel[channel] for pixel in corners)[2] for channel in range(3))
+    difference=ImageChops.difference(tile,Image.new('RGB',tile.size,background))
+    red,green,blue=difference.split()
+    mask=ImageChops.lighter(ImageChops.lighter(red,green),blue).point(lambda value:min(255,value*20))
+    ink=Image.composite(tile.convert('L'),Image.new('L',tile.size,128),mask)
+    mask,ink=mask.crop((3,3,29,29)),ink.crop((3,3,29,29))
+    return Image.merge('RGB',(mask,ink,ink))
 
 
 class ScreenBoardReader:
@@ -136,6 +156,7 @@ class ScreenBoardReader:
         if min(image.size) < 160 or abs(image.width-image.height) > 4:
             raise ValueError('Selecione somente as 64 casas de um tabuleiro quadrado (mínimo 160 px).')
         self.orientation = orientation
+        self.profile_name='Calibração inicial'
         self.size = image.size
         self.templates = {}
         initial = chess.Board()
@@ -175,11 +196,41 @@ class ScreenBoardReader:
         reader.orientation=orientation
         reader.size=tuple(size)
         reader.templates=self.templates
+        reader.profile_name=getattr(self,'profile_name','Calibração inicial')
         return reader
 
+    @classmethod
+    def new_profile(cls,size,orientation='white',name='Tema personalizado'):
+        reader=object.__new__(cls)
+        reader.size=tuple(size)
+        reader.orientation=orientation
+        reader.profile_name=str(name).strip()[:80] or 'Tema personalizado'
+        reader.templates={symbol:[] for symbol in PIECE_LABELS}
+        return reader.for_region(size,orientation)
+
+    @property
+    def missing_symbols(self):
+        return [symbol for symbol in PIECE_LABELS if not self.templates.get(symbol)]
+
+    def add_example(self,image,row,col,symbol):
+        if symbol not in PIECE_LABELS or not 0<=row<8 or not 0<=col<8:
+            raise ValueError('Escolha uma peça e uma casa válida.')
+        if image.size!=self.size:raise ValueError('A área mudou; reinicie o ensino deste perfil.')
+        self.add_tile(symbol,image.crop((round(col*image.width/8),round(row*image.height/8),
+                                        round((col+1)*image.width/8),round((row+1)*image.height/8))))
+
+    def add_tile(self,symbol,image):
+        if symbol not in PIECE_LABELS:raise ValueError('Escolha o tipo de peça.')
+        if min(image.size)<12:raise ValueError('O exemplo precisa mostrar a casa inteira.')
+        if len(self.templates[symbol])>=64 or sum(map(len,self.templates.values()))>=256:
+            raise ValueError('Limite de exemplos atingido; remova um exemplo ou crie outro perfil.')
+        self.templates[symbol].append(feature(image))
+
     def save(self,path):
+        if self.missing_symbols:raise ValueError('Complete os exemplos de todas as peças antes de salvar.')
         # Only normalized piece features: never full desktop screenshots.
-        data={'format':'split-contrast-v1','size':self.size,'orientation':self.orientation,
+        data={'format':'foreground-ink-v2','size':self.size,'orientation':self.orientation,
+              'profile_name':self.profile_name,
               'templates':{symbol:[base64.b64encode(tile.tobytes()).decode('ascii') for tile in tiles]
                            for symbol,tiles in self.templates.items()}}
         temporary=path.with_suffix('.tmp')
@@ -191,7 +242,7 @@ class ScreenBoardReader:
         if path.stat().st_size>1000000:raise ValueError('Referências salvas inválidas')
         data=json.loads(path.read_text(encoding='utf-8'))
         if not isinstance(data,dict):raise ValueError('Referências salvas inválidas')
-        if data.get('format')!='split-contrast-v1':raise ValueError('Referências de outra versão')
+        if data.get('format')!='foreground-ink-v2':raise ValueError('Perfil antigo: ensine as peças novamente nesta versão.')
         templates=data.get('templates')
         if not isinstance(templates,dict) or set(templates)!=set('.KQRBNPkqrbnp'):
             raise ValueError('Referências de peças incompletas')
@@ -205,6 +256,7 @@ class ScreenBoardReader:
                 decoded[symbol].append(Image.frombytes('RGB',(26,26),raw))
         reader=object.__new__(cls)
         reader.templates=decoded
+        reader.profile_name=str(data.get('profile_name','Calibração inicial'))[:80]
         reader.orientation=data.get('orientation')
         reader.size=tuple(data.get('size',()))
         if len(reader.size)!=2 or not all(isinstance(v,int) for v in reader.size):
@@ -216,6 +268,9 @@ class ScreenBoardReader:
         return sum(ImageStat.Stat(ImageChops.difference(a, b)).mean)/3
 
     def read(self, image):
+        if self.missing_symbols:
+            missing=', '.join(PIECE_LABELS[symbol] for symbol in self.missing_symbols)
+            raise ValueError('Perfil incompleto: cadastre '+missing)
         if image.size != self.size:
             raise ValueError('Tamanho alterado; calibre o tabuleiro novamente.')
         board = chess.Board(None)
@@ -225,7 +280,9 @@ class ScreenBoardReader:
                 matches = sorted((min(self._distance(tile, t) for t in templates), symbol)
                                  for symbol, templates in self.templates.items())
                 (distance, symbol), (runner_up, _) = matches[:2]
-                if distance > 10 or runner_up-distance < 1.2:
+                # Small light/dark-square variation is accepted only when the
+                # winning piece remains well separated from the runner-up.
+                if distance>12 or runner_up-distance<1.2 or (distance>10 and runner_up<distance*1.8):
                     square=chess.square_name(square_at(row,col,self.orientation))
                     raise ValueError(f'Casa {square}: peça incerta. Aguarde a área ficar visível.')
                 if symbol != '.':

@@ -14,6 +14,46 @@ from test_screen_reader import render
 
 
 class InterfaceViewTests(unittest.TestCase):
+    def test_teaching_clicks_undo_and_validation_before_using_profile(self):
+        from screen_reader import PIECE_LABELS,square_at
+        root=Tk()
+        try:
+            with tempfile.TemporaryDirectory() as temp,patch.object(app,'CONFIG',Path(temp)/'config.json'):
+                ui=app.ChessVisionUI(root,app.AnalysisState())
+                board=chess.Board()
+                for move in ('e4','d5','Nc3','Nf6'):board.push_san(move)
+                accepted=[]
+                trainer=ui.teach_piece_profile(render(board),'white',accepted.append)
+                root.update()
+                def find(widget,text):
+                    for child in widget.winfo_children():
+                        if child.winfo_class()=='TButton' and child.cget('text')==text:return child
+                        result=find(child,text)
+                        if result:return result
+                find(trainer,'Usar perfil').invoke()
+                self.assertEqual(accepted,[])
+                for symbol in PIECE_LABELS:
+                    ui.teaching_choice.set(PIECE_LABELS[symbol])
+                    cells=[(row,col) for row in range(8) for col in range(8)
+                           if (board.piece_at(square_at(row,col,'white')).symbol()
+                               if board.piece_at(square_at(row,col,'white')) else '.')==symbol]
+                    row,col=cells[0]
+                    ui.teaching_canvas.event_generate('<Button-1>',x=col*35+17,y=row*35+17)
+                    root.update()
+                self.assertEqual(ui.teaching_reader.missing_symbols,[])
+                find(trainer,'Desfazer').invoke()
+                self.assertEqual(ui.teaching_reader.missing_symbols,['k'])
+                # Use another king click after the intentional double-click guard.
+                time.sleep(.36)
+                ui.teaching_canvas.event_generate('<Button-1>',x=4*35+17,y=17)
+                root.update()
+                find(trainer,'Usar perfil').invoke()
+                self.assertEqual(len(accepted),1)
+                self.assertEqual(accepted[0].read(render(board)),board.board_fen())
+                self.assertIsNone(ui.state.board)
+                self.assertFalse((Path(temp)/'.reader_templates.json').exists())
+        finally:root.destroy()
+
     def test_reopening_loads_saved_theme_and_starts_cancellable_background_search(self):
         from screen_reader import ScreenBoardReader
         root=Tk()
@@ -29,6 +69,7 @@ class InterfaceViewTests(unittest.TestCase):
                         root.update()
                         time.sleep(.02)
                     self.assertTrue(ui.search_active)
+                    self.assertEqual(root.state(),'normal')
                     self.assertEqual(thread.call_args.kwargs['target'],ui.search_game)
                     old_generation=ui.capture_generation
                     ui.stop_screen()
@@ -161,7 +202,7 @@ class InterfaceViewTests(unittest.TestCase):
                     dialog = ui.review_screen_board(screenshot, [(17,23,497,503),(18,24,498,504)])
                     root.update()
                     find_button(dialog,'Outra região').invoke()
-                    self.assertEqual([v.get() for v in ui.screen_review_vars], [18,24,480,480])
+                    self.assertEqual([v.get() for v in ui.screen_review_vars], [17,23,480,480])
                     find_button(dialog,'Outra região').invoke()
                     ui.screen_review_vars[2].set(159)
                     find_button(dialog,'Confirmar e continuar').invoke()
