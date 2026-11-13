@@ -1,5 +1,7 @@
 # Componentes de terceiros
 
+- **Perfil cburnett pronto**: características visuais derivadas das peças de Colin M. L. Burnett, GPL-2.0-or-later. SVGs, imagem de referência, atribuição, instruções de reconstrução e licença em `profiles/cburnett-source/`. Fonte: https://github.com/lichess-org/lila/tree/master/public/piece/cburnett e https://github.com/lichess-org/lila/blob/master/COPYING.md.
+
 - **Pillow**: captura e processamento local das imagens; licença MIT-CMU. Repositório e licença: https://github.com/python-pillow/Pillow
 
 - **Stockfish 19**: motor de xadrez de código aberto GPL-3.0; download separado da distribuição oficial. Repositório e licença: https://github.com/official-stockfish/Stockfish

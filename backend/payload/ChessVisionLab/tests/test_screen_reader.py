@@ -166,7 +166,7 @@ class ScreenReaderTests(unittest.TestCase):
         for move in ('e4','e5','Nf3'):board.push_san(move)
         class Stop:
             count=0
-            def is_set(self):return self.count>=12
+            def is_set(self):return self.count>=32
             def wait(self,_):self.count+=1
         with patch('PIL.ImageGrab.grab',return_value=render(board)):
             ui.read_screen(reader,(0,0,480,480),Stop())
@@ -308,7 +308,7 @@ class ScreenReaderTests(unittest.TestCase):
         ImageDraw.Draw(blocked).rectangle((0,0,479,150),fill='red')
         moved=chess.Board()
         moved.push_san('e4')
-        frames=[initial,initial,blocked,blocked,initial,initial,render(moved),render(moved)]
+        frames=[initial,initial]+[blocked]*6+[initial,initial,render(moved),render(moved)]
         reader=ScreenBoardReader(initial)
         state=app.AnalysisState()
         state.screen_active=True

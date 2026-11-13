@@ -312,7 +312,39 @@ class ScreenBoardReader:
                            for distance,symbol in matches)
         return matches
 
-    def read(self, image):
+    @staticmethod
+    def _resolve_move(board, observations, uncertain):
+        """Resolve at most two close visual ties using a unique legal move.
+
+        Never fills in a hidden board or overrides a confident classification.
+        At least one changed square must be visually certain.
+        """
+        if board is None or not board.is_valid() or len(uncertain)>2:
+            return None
+        candidates=[]
+        before=board.piece_map()
+        # Include the unchanged position: a tie resolved on the last move must
+        # remain readable on subsequent frames, without inventing another move.
+        for move in [None,*board.legal_moves]:
+            candidate=board.copy(stack=False)
+            if move is not None:candidate.push(move)
+            changed_certain=False
+            for square,matches in observations.items():
+                piece=candidate.piece_at(square)
+                expected=piece.symbol() if piece else '.'
+                if square in uncertain:
+                    distance=next((d for d,s in matches if s==expected),float('inf'))
+                    if distance>14 or distance-matches[0][0]>4:
+                        break
+                elif matches[0][1]!=expected:
+                    break
+                elif candidate.piece_at(square)!=before.get(square):
+                    changed_certain=True
+            else:
+                if changed_certain or move is None:candidates.append(candidate.board_fen())
+        return candidates[0] if len(candidates)==1 else None
+
+    def read(self, image, board=None):
         if self.missing_symbols:
             missing=', '.join(PIECE_LABELS[symbol] for symbol in self.missing_symbols)
             raise ValueError('Perfil incompleto: cadastre '+missing)
@@ -322,7 +354,10 @@ class ScreenBoardReader:
         if signature!=getattr(self,'_cache_signature',None):
             self._cache_signature=signature
             self._square_cache={}
+        previous_board=board
         board = chess.Board(None)
+        observations={}
+        uncertain={}
         for row in range(8):
             for col in range(8):
                 raw=image.crop((round(col*image.width/8),round(row*image.height/8),
@@ -331,6 +366,7 @@ class ScreenBoardReader:
                 cached=self._square_cache.get((row,col))
                 if cached and cached[0]==key:
                     symbol=cached[1]
+                    observations[square_at(row,col,self.orientation)]=[(0,symbol)]
                     if symbol!='.':board.set_piece_at(square_at(row,col,self.orientation),chess.Piece.from_symbol(symbol))
                     continue
                 tile = feature(raw)
@@ -346,10 +382,17 @@ class ScreenBoardReader:
                 # Small light/dark-square variation is accepted only when the
                 # winning piece remains well separated from the runner-up.
                 if self._uncertain(matches) and self._uncertain(matches,colored):
-                    raise UncertainSquareError(row,col,self.orientation,matches[:2])
-                self._square_cache[row,col]=(key,symbol)
+                    if previous_board is None:
+                        raise UncertainSquareError(row,col,self.orientation,matches[:2])
+                    uncertain[square_at(row,col,self.orientation)]=UncertainSquareError(row,col,self.orientation,matches[:2])
+                else:self._square_cache[row,col]=(key,symbol)
+                observations[square_at(row,col,self.orientation)]=matches
                 if symbol != '.':
                     board.set_piece_at(square_at(row, col, self.orientation), chess.Piece.from_symbol(symbol))
+        if uncertain:
+            resolved=self._resolve_move(previous_board,observations,uncertain)
+            if resolved is None:raise next(iter(uncertain.values()))
+            return resolved
         if len(board.pieces(chess.KING, chess.WHITE)) != 1 or len(board.pieces(chess.KING, chess.BLACK)) != 1:
             raise ValueError('Reis não reconhecidos; confira a captura ou calibre novamente.')
         return board.board_fen()

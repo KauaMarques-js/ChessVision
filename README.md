@@ -29,6 +29,9 @@ Requer Windows 10/11 x64 e internet na primeira instalação. O EXE inclui a cen
 
 ## O que a central faz
 
+- Inclui um perfil de reconhecimento **cburnett pronto**, sem cadastro inicial para esse estilo. Em **Leitura → Perfis salvos**, selecione um tema existente ou crie outro. Cada exemplo ensinado é salvo automaticamente, inclusive cadastros incompletos.
+- O leitor Python acompanha os movimentos em segundo plano e usa o histórico legal para resolver pequenas ambiguidades visuais. O histórico fica salvo por perfil para conferir e retomar após reabrir. A leitura ainda depende do tabuleiro visível e de um tema compatível; não há precisão universal garantida.
+
 - Instala e verifica o ambiente com o instalador original adaptado, sem console aberto.
 - Mostra o estado dos arquivos encontrados e se o servidor local responde em `127.0.0.1:8765`.
 - Abre o analisador sem reinstalar dependências a cada execução.

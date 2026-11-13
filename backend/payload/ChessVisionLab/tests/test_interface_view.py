@@ -14,6 +14,49 @@ from test_screen_reader import render
 
 
 class InterfaceViewTests(unittest.TestCase):
+    def test_partial_training_autosaves_on_click_and_window_close(self):
+        from screen_reader import ScreenBoardReader, PIECE_LABELS
+        root=Tk()
+        try:
+            with tempfile.TemporaryDirectory() as temp,patch.object(app,'CONFIG',Path(temp)/'config.json'):
+                ui=app.ChessVisionUI(root,app.AnalysisState())
+                trainer=ui.teach_piece_profile(render(chess.Board()),'white',lambda _:None)
+                root.update()
+                self.assertIsNone(ui.auto_search_job)
+                ui.teaching_choice.set(PIECE_LABELS['r'])
+                ui.teaching_canvas.event_generate('<Button-1>',x=17,y=17)
+                root.update()
+                path=Path(temp)/'.reader_draft.json'
+                self.assertEqual(len(ScreenBoardReader.load(path,allow_incomplete=True).templates['r']),1)
+                trainer.tk.call(trainer.protocol('WM_DELETE_WINDOW'));root.update()
+                self.assertFalse(trainer.winfo_exists())
+                trainer=ui.teach_piece_profile(render(chess.Board()),'white',lambda _:None)
+                self.assertEqual(len(ui.teaching_reader.templates['r']),1)
+                self.assertIsNone(ui.state.board)
+        finally:root.destroy()
+
+    def test_saved_history_waits_for_screen_confirmation_after_restart(self):
+        from reader_profiles import ReaderProfiles
+        from screen_reader import ScreenBoardReader
+        root=Tk()
+        try:
+            with tempfile.TemporaryDirectory() as temp,patch.object(app,'CONFIG',Path(temp)/'config.json'):
+                folder=Path(temp)
+                reader=ScreenBoardReader(render(chess.Board()))
+                reader.save(folder/'.reader_templates.json')
+                board=chess.Board();board.push_san('e4');board.push_san('d5')
+                ReaderProfiles(folder/'reader_profiles').save_game(reader,board)
+                state=app.AnalysisState()
+                ui=app.ChessVisionUI(root,state)
+                self.assertEqual(state.tracker.board.fen(),board.fen())
+                self.assertIsNone(state.board)
+                self.assertFalse(state.screen_active)
+                self.assertEqual(state.preview_screen_position(board.board_fen()).mode,'histórico local')
+                dialog=ui.choose_reader_profile();root.update()
+                self.assertIsNone(ui.auto_search_job)
+                self.assertTrue(dialog.winfo_exists())
+        finally:root.destroy()
+
     def test_piece_bank_saves_and_reopens_without_a_current_position(self):
         from screen_reader import ScreenBoardReader
         root=Tk()
@@ -32,7 +75,7 @@ class InterfaceViewTests(unittest.TestCase):
                 self.assertIsNone(ui.state.board)
                 self.assertTrue((Path(temp)/'.reader_draft.json').exists())
                 self.assertEqual(ui.teaching_reader.missing_symbols,[])
-                find(trainer,'Cancelar').invoke()
+                find(trainer,'Fechar').invoke()
                 trainer=ui.teach_piece_profile(None,'white',lambda reader:None)
                 self.assertEqual(ui.teaching_reader.missing_symbols,[])
                 self.assertIsNone(ui.state.board)
@@ -100,7 +143,9 @@ class InterfaceViewTests(unittest.TestCase):
                 self.assertEqual(len(accepted),1)
                 self.assertEqual(accepted[0].read(render(board)),board.board_fen())
                 self.assertIsNone(ui.state.board)
-                self.assertFalse((Path(temp)/'.reader_templates.json').exists())
+                # A completed bank now persists immediately, independently of
+                # whether the current position has been confirmed.
+                self.assertTrue((Path(temp)/'.reader_templates.json').exists())
         finally:root.destroy()
 
     def test_reopening_loads_saved_theme_and_starts_cancellable_background_search(self):

@@ -136,6 +136,45 @@ Uma execução bem-sucedida dos autotestes ainda não substitui um teste real da
 
 ## Ensinar o estilo das peças
 
+### Perfis persistentes e reconhecimento com regras
+
+**Leitura → Perfis salvos** oferece **cburnett (pronto)** e os temas já cadastrados.
+O perfil fornecido identifica o desenho cburnett 2D, inclusive em posições no
+meio da partida; não representa todos os estilos de peças. Se não houver um
+perfil ativo salvo, esse perfil fica selecionado ao abrir. A conferência tenta
+também os demais perfis completos antes de pedir uma nova calibração.
+
+Use **Novo perfil** para cadastrar um estilo diferente. Cada inclusão, remoção,
+desfazer e fechamento do cadastro salva o progresso automaticamente. Renomear
+e salvar cria uma cópia na biblioteca. **Aprender todas: tabuleiro na posição
+inicial**, na conferência com imagem, aprende os 13 tipos de uma vez. Essa ação
+exige realmente a posição inicial. Os perfis completos anteriores são copiados
+para a biblioteca sem apagar os arquivos legados.
+
+Os exemplos ficam em `reader_profiles/`, com nomes de arquivo derivados do nome
+do perfil. `.reader_draft.json` mantém o último cadastro aberto;
+`.reader_templates.json` mantém o perfil ativo. Só características normalizadas
+das casas são guardadas, sem capturas completas do ambiente.
+
+O classificador local compara exemplos e usa `python-chess` como contexto:
+até duas casas visualmente ambíguas podem ser resolvidas quando existe **um
+único lance legal compatível**, com pelo menos uma casa alterada reconhecida
+com confiança. Uma peça identificada com confiança nunca é substituída pela
+previsão. Promoções ambíguas e obstruções maiores continuam aguardando imagem.
+Não é uma rede neural nem requer API ou internet.
+
+O histórico observado é salvo por perfil em arquivos `.game`, incluindo a
+posição inicial e os movimentos UCI. Ao reabrir, ele é reproduzido e validado,
+preservando turno, roque, en passant, contadores e repetições que foram observados.
+O motor aguarda conferir a posição visível antes de retomar. Lances não observados
+e estados históricos ausentes não são inventados. A leitura mostra de quem é a
+vez, último lance UCI e resultado quando identifica o fim da partida.
+
+Obstruções visuais são toleradas por 12 falhas de leitura antes de relocalizar;
+falhas de captura por 4 tentativas. A busca continua até encontrar outra região
+ou o usuário clicar em Parar. Abrir o cadastro ou a conferência cancela a busca
+agendada para evitar que ela interrompa a edição.
+
 Antes da partida, abra **Leitura → Cadastro de peças**. **Importar casa…** cadastra imagens individuais de casas com peça e margens, uma classe por vez. **Salvar cadastro** guarda o progresso mesmo sem todos os tipos ou sem uma posição reconhecida. Ao completar os 12 tipos e uma casa vazia, o perfil fica disponível para leitura. O cadastro abre com os exemplos salvos e não exige que peças capturadas voltem ao tabuleiro. **Limpar tipo selecionado** corrige exemplos de outro estilo ou com rótulo errado.
 
 O cadastro e a confirmação da partida são etapas independentes: salvar exemplos não altera a posição nem inicia o motor. A conferência mantém **Confirmar e continuar**, com vez/roques quando necessário. Perfis completos anteriores continuam compatíveis.
@@ -146,6 +185,6 @@ Na conferência, use **Alinhar grade** para ajustar uma seleção aproximada às
 
 Se **Usar perfil** encontrar uma casa incerta, ela aparece destacada e ampliada. Confira o tipo selecionado e clique na casa para adicionar o exemplo correto. O tipo sugerido é apenas o candidato mais próximo, não uma confirmação automática. A leitura tolera pequenos deslocamentos de rasterização sem dispensar os critérios de confiança ou aceitar peças indistinguíveis. Perfis foreground-ink-v2 já salvos continuam compatíveis.
 
-**Importar casa…** permite fornecer o recorte de uma casa inteira (PNG, JPEG ou WebP), com peça e margens, útil quando um tipo já foi capturado na partida. Use o mesmo estilo e enquadramento. Não importe uma folha com várias peças. Dê um nome ao perfil e clique em **Usar perfil**. O programa exige todos os exemplos e uma posição reconhecida válida. Confira **Peças lidas**, a vez e os roques, depois **Confirmar e continuar**. Só essa confirmação salva o perfil e retoma a leitura.
+**Importar casa…** permite fornecer o recorte de uma casa inteira (PNG, JPEG ou WebP), com peça e margens, útil quando um tipo já foi capturado na partida. Use o mesmo estilo e enquadramento. Não importe uma folha com várias peças. Dê um nome ao perfil e clique em **Usar perfil**. O programa exige todos os exemplos e uma posição reconhecida válida. Confira **Peças lidas**, a vez e os roques, depois **Confirmar e continuar**. O cadastro é salvo automaticamente; a confirmação retoma a leitura da partida.
 
-O reconhecimento compara exemplos locais; não é um treinamento de rede neural. O último perfil confirmado permanece salvo para esse tema. A versão nova usa referências `foreground-ink-v2`: perfis de versões anteriores precisam ser ensinados novamente ou recalibrados na posição inicial. A tela do jogo deve estar visível; capturas incompletas e peças ambíguas continuam aguardando uma leitura confiável.
+O reconhecimento compara exemplos locais; não é um treinamento de rede neural. Cada tema cadastrado permanece salvo na biblioteca de perfis. A versão nova usa referências `foreground-ink-v2`: perfis de versões anteriores precisam ser ensinados novamente ou recalibrados na posição inicial. A tela do jogo deve estar visível; capturas incompletas e peças ambíguas continuam aguardando uma leitura confiável.

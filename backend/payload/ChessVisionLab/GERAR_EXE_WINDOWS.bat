@@ -13,6 +13,7 @@ if errorlevel 1 (pause & exit /b 1)
 if not exist "dist\engine" mkdir "dist\engine"
 xcopy /e /i /y "engine\*" "dist\engine\" >nul
 xcopy /e /i /y "extension\*" "dist\extension\" >nul
+xcopy /e /i /y "profiles\*" "dist\profiles\" >nul
 echo.
 echo Pronto: dist\ChessVisionLab.exe
 pause
