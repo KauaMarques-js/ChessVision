@@ -31,6 +31,46 @@ def render(board, orientation='white', highlight=None, highlights=None):
 
 
 class ScreenReaderTests(unittest.TestCase):
+    def test_red_gradient_and_yellow_highlight_keep_piece_identity(self):
+        board=chess.Board();board.push_san('e4')
+        reader=ScreenBoardReader(render(chess.Board()))
+        image=render(board,highlights={chess.E2:(245,220,60),chess.E4:(245,220,60)})
+        # The check effect covers the background, not the piece itself.
+        tile=image.crop((240,420,300,480))
+        draw=ImageDraw.Draw(tile)
+        for radius in range(42,0,-1):
+            t=1-radius/42
+            color=(int(220+(255-220)*t),int(210*(1-t)),int(180*(1-t)))
+            draw.ellipse((30-radius,30-radius,30+radius,30+radius),fill=color)
+        draw.text((13,6),'K',font=ImageFont.load_default(size=42),fill='white')
+        image.paste(tile,(240,420))
+        self.assertEqual(reader.read(image),board.board_fen())
+
+    def test_cached_profile_reads_captured_types_and_only_rechecks_changed_squares(self):
+        reader=ScreenBoardReader(render(chess.Board()))
+        board=chess.Board('4k3/8/8/8/8/8/4P3/4K3 w - - 0 1')
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'profile.json';reader.save(path)
+            restored=ScreenBoardReader.load(path)
+            self.assertEqual(restored.read(render(board)),board.board_fen())
+            with patch.object(restored,'_matches',wraps=restored._matches) as match:
+                self.assertEqual(restored.read(render(board)),board.board_fen())
+                match.assert_not_called()
+                board.push_san('e4')
+                self.assertEqual(restored.read(render(board)),board.board_fen())
+                self.assertEqual(match.call_count,2)
+
+    def test_partial_piece_bank_can_be_saved_before_any_board_is_recognized(self):
+        reader=ScreenBoardReader.new_profile((480,480),name='Meu cadastro')
+        reader.add_example(render(chess.Board()),0,0,'r')
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'draft.json';reader.save(path,allow_incomplete=True)
+            loaded=ScreenBoardReader.load(path,allow_incomplete=True)
+            self.assertEqual(len(loaded.templates['r']),1)
+            self.assertEqual(len(loaded.missing_symbols),12)
+            with self.assertRaises(ValueError):loaded.read(render(chess.Board()))
+            with self.assertRaises(ValueError):ScreenBoardReader.load(path)
+
     def test_black_rooks_keep_identity_with_small_raster_offsets(self):
         board=chess.Board();board.push_san('e4')
         image=render(board,'black')

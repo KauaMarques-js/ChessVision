@@ -136,6 +136,12 @@ Uma execução bem-sucedida dos autotestes ainda não substitui um teste real da
 
 ## Ensinar o estilo das peças
 
+Antes da partida, abra **Leitura → Cadastro de peças**. **Importar casa…** cadastra imagens individuais de casas com peça e margens, uma classe por vez. **Salvar cadastro** guarda o progresso mesmo sem todos os tipos ou sem uma posição reconhecida. Ao completar os 12 tipos e uma casa vazia, o perfil fica disponível para leitura. O cadastro abre com os exemplos salvos e não exige que peças capturadas voltem ao tabuleiro. **Limpar tipo selecionado** corrige exemplos de outro estilo ou com rótulo errado.
+
+O cadastro e a confirmação da partida são etapas independentes: salvar exemplos não altera a posição nem inicia o motor. A conferência mantém **Confirmar e continuar**, com vez/roques quando necessário. Perfis completos anteriores continuam compatíveis.
+
+A leitura reutiliza resultados de casas cuja imagem não mudou e consulta a tela a cada 0,2 segundo, além do tempo de captura/processamento. Duas leituras estáveis continuam obrigatórias. Realces amarelos uniformes e degradês coloridos de cheque têm tratamento de fundo; o filtro de degradê destina-se a peças neutras claras/escuras, como cburnett. Temas com peças coloridas ou efeitos que cubram a própria peça podem continuar incertos.
+
 Na conferência, use **Alinhar grade** para ajustar uma seleção aproximada às bordas observadas. Clique em **Ensinar tema**: escolha o tipo e clique em uma casa que contenha a peça correspondente. Cadastre os 12 tipos (seis brancos e seis pretos) e uma casa vazia; o próximo tipo é selecionado automaticamente. Para torres pretas e outros tipos, selecione o tipo novamente e clique em uma peça numa casa de outra cor: os exemplos são somados, sem apagar o anterior. **Desfazer** remove a última alteração; **Limpar tipo selecionado** permite corrigir exemplos com rótulo errado.
 
 Se **Usar perfil** encontrar uma casa incerta, ela aparece destacada e ampliada. Confira o tipo selecionado e clique na casa para adicionar o exemplo correto. O tipo sugerido é apenas o candidato mais próximo, não uma confirmação automática. A leitura tolera pequenos deslocamentos de rasterização sem dispensar os critérios de confiança ou aceitar peças indistinguíveis. Perfis foreground-ink-v2 já salvos continuam compatíveis.

@@ -12,6 +12,7 @@ __pycache__/
 config.json
 reader_templates.json
 .reader_templates.json
+.reader_draft.json
 diagnostico_resultado.txt
 erro_interface_tkinter.txt
 aplicativo.log

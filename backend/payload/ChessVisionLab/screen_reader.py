@@ -136,13 +136,21 @@ def square_at(row, col, orientation):
                         row if orientation == 'black' else 7-row)
 
 
-def feature(tile):
+def feature(tile, suppress_color=False):
     # Preserve absolute foreground ink, masking the background. SVG pieces may
     # contain grey strokes whose polarity changes on light versus dark squares.
     if 'A' in tile.getbands() or 'transparency' in tile.info:
         rgba=tile.convert('RGBA')
         tile=Image.alpha_composite(Image.new('RGBA',rgba.size,(160,160,160,255)),rgba)
-    tile = tile.convert('RGB').resize((32, 32), Image.Resampling.LANCZOS)
+    tile=tile.convert('RGB')
+    if suppress_color:
+        red,green,blue=tile.split()
+        saturation=ImageChops.subtract(ImageChops.lighter(ImageChops.lighter(red,green),blue),
+                                       ImageChops.darker(ImageChops.darker(red,green),blue))
+        corners=[tile.getpixel(p) for p in ((0,0),(tile.width-1,0),(0,tile.height-1),(tile.width-1,tile.height-1))]
+        background=tuple(sorted(p[c] for p in corners)[2] for c in range(3))
+        tile=Image.composite(Image.new('RGB',tile.size,background),tile,saturation.point(lambda v:255 if v>48 else 0))
+    tile = tile.resize((32, 32), Image.Resampling.LANCZOS)
     corners = [tile.getpixel(p) for p in ((2, 2), (29, 2), (2, 29), (29, 29))]
     background=tuple(sorted(pixel[channel] for pixel in corners)[2] for channel in range(3))
     difference=ImageChops.difference(tile,Image.new('RGB',tile.size,background))
@@ -151,6 +159,14 @@ def feature(tile):
     ink=Image.composite(tile.convert('L'),Image.new('L',tile.size,128),mask)
     mask,ink=mask.crop((3,3,29,29)),ink.crop((3,3,29,29))
     return Image.merge('RGB',(mask,ink,ink))
+
+
+def colored_effect(tile):
+    sample=tile.convert('RGB').resize((16,16))
+    corners=[sample.getpixel(p) for p in ((0,0),(15,0),(0,15),(15,15))]
+    background=tuple(sorted(p[c] for p in corners)[2] for c in range(3))
+    return sum(max(p)-min(p)>50 and max(abs(a-b) for a,b in zip(p,background))>45
+               for p in (sample.getpixel((x,y)) for y in range(16) for x in range(16)))>=12
 
 
 class ScreenBoardReader:
@@ -235,8 +251,8 @@ class ScreenBoardReader:
             raise ValueError('Limite de exemplos atingido; remova um exemplo ou crie outro perfil.')
         self.templates[symbol].append(feature(image))
 
-    def save(self,path):
-        if self.missing_symbols:raise ValueError('Complete os exemplos de todas as peças antes de salvar.')
+    def save(self,path,allow_incomplete=False):
+        if self.missing_symbols and not allow_incomplete:raise ValueError('Complete os exemplos de todas as peças antes de salvar.')
         # Only normalized piece features: never full desktop screenshots.
         data={'format':'foreground-ink-v2','size':self.size,'orientation':self.orientation,
               'profile_name':self.profile_name,
@@ -247,7 +263,7 @@ class ScreenBoardReader:
         temporary.replace(path)
 
     @classmethod
-    def load(cls,path):
+    def load(cls,path,allow_incomplete=False):
         if path.stat().st_size>1000000:raise ValueError('Referências salvas inválidas')
         data=json.loads(path.read_text(encoding='utf-8'))
         if not isinstance(data,dict):raise ValueError('Referências salvas inválidas')
@@ -257,7 +273,7 @@ class ScreenBoardReader:
             raise ValueError('Referências de peças incompletas')
         decoded={}
         for symbol,tiles in templates.items():
-            if not isinstance(tiles,list) or not 1<=len(tiles)<=64:raise ValueError('Referências inválidas')
+            if not isinstance(tiles,list) or not (0 if allow_incomplete else 1)<=len(tiles)<=64:raise ValueError('Referências inválidas')
             decoded[symbol]=[]
             for tile in tiles:
                 raw=base64.b64decode(tile,validate=True)
@@ -277,8 +293,9 @@ class ScreenBoardReader:
         return sum(ImageStat.Stat(ImageChops.difference(a, b)).mean)/3
 
     @staticmethod
-    def _uncertain(matches):
+    def _uncertain(matches,colored=False):
         distance,runner_up=matches[0][0],matches[1][0]
+        if colored:return distance>24 or runner_up-distance<20 or runner_up<distance*2.5
         return distance>12 or runner_up-distance<1.2 or (distance>10 and runner_up<distance*1.8)
 
     def _matches(self,tile):
@@ -301,16 +318,36 @@ class ScreenBoardReader:
             raise ValueError('Perfil incompleto: cadastre '+missing)
         if image.size != self.size:
             raise ValueError('Tamanho alterado; calibre o tabuleiro novamente.')
+        signature=tuple((s,tuple(id(t) for t in ts)) for s,ts in self.templates.items())
+        if signature!=getattr(self,'_cache_signature',None):
+            self._cache_signature=signature
+            self._square_cache={}
         board = chess.Board(None)
         for row in range(8):
             for col in range(8):
-                tile = self._tile(image, row, col)
+                raw=image.crop((round(col*image.width/8),round(row*image.height/8),
+                                round((col+1)*image.width/8),round((row+1)*image.height/8)))
+                key=(raw.mode,raw.size,raw.tobytes())
+                cached=self._square_cache.get((row,col))
+                if cached and cached[0]==key:
+                    symbol=cached[1]
+                    if symbol!='.':board.set_piece_at(square_at(row,col,self.orientation),chess.Piece.from_symbol(symbol))
+                    continue
+                tile = feature(raw)
                 matches = self._matches(tile)
+                colored=False
+                if self._uncertain(matches) and colored_effect(raw):
+                    # Check/checkmate effects can be radial gradients rather
+                    # than flat colors. Colored pixels are background in the
+                    # neutral-piece fallback; all confidence checks still apply.
+                    matches=self._matches(feature(raw,suppress_color=True))
+                    colored=True
                 (distance, symbol), (runner_up, _) = matches[:2]
                 # Small light/dark-square variation is accepted only when the
                 # winning piece remains well separated from the runner-up.
-                if self._uncertain(matches):
+                if self._uncertain(matches) and self._uncertain(matches,colored):
                     raise UncertainSquareError(row,col,self.orientation,matches[:2])
+                self._square_cache[row,col]=(key,symbol)
                 if symbol != '.':
                     board.set_piece_at(square_at(row, col, self.orientation), chess.Piece.from_symbol(symbol))
         if len(board.pieces(chess.KING, chess.WHITE)) != 1 or len(board.pieces(chess.KING, chess.BLACK)) != 1:

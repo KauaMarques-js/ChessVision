@@ -589,6 +589,8 @@ class ChessVisionUI:
         ttk.Button(actions,text='Iniciar',command=self.select_screen_board).pack(side='left')
         ttk.Button(actions,text='Tentar novamente',command=self.retry_screen).pack(side='left',padx=4)
         ttk.Button(actions,text='Parar',command=self.stop_screen).pack(side='left')
+        ttk.Button(self.reading_tab,text='Cadastro de peças',command=lambda:self.teach_piece_profile(
+            None,'black' if self.screen_orientation.get()=='Pretas embaixo' else 'white',lambda reader:None)).pack(anchor='w')
         self.screen_status=StringVar(value='Captura não iniciada.')
         ttk.Label(self.reading_tab,textvariable=self.screen_status,wraplength=350).pack(anchor='w',pady=5)
         ttk.Label(self.reading_tab,textvariable=self.sourcevar,style='Hint.TLabel',wraplength=350).pack(anchor='w')
@@ -1322,6 +1324,8 @@ class ChessVisionUI:
         from PIL import Image,ImageTk
         from screen_reader import ScreenBoardReader,PIECE_LABELS,square_at,UncertainSquareError
         parent=parent or self.root
+        standalone=crop is None
+        if standalone:crop=Image.new('RGB',(480,480),'#283445')
         trainer=tk.Toplevel(parent)
         trainer.title('Ensinar estilo das peças')
         trainer.transient(parent)
@@ -1331,7 +1335,10 @@ class ChessVisionUI:
         ttk.Label(panel,text='Escolha o tipo e clique na casa que mostra essa peça.',wraplength=380).pack(anchor='w')
         ttk.Label(panel,text='São 12 tipos + casa vazia. Para torres e outras peças, adicione exemplos em casas claras e escuras.',
                   style='Hint.TLabel',wraplength=380).pack(anchor='w',pady=3)
-        name=StringVar(value='Meu tema')
+        reference=None
+        try:reference=ScreenBoardReader.load(CONFIG.with_name('.reader_draft.json'),allow_incomplete=True)
+        except (OSError,ValueError):reference=self.screen_reader
+        name=StringVar(value=reference.profile_name if reference else 'Meu tema')
         namerow=ttk.Frame(panel);namerow.pack(fill='x',pady=3)
         ttk.Label(namerow,text='Perfil:').pack(side='left')
         ttk.Entry(namerow,textvariable=name,width=25).pack(side='left',padx=4)
@@ -1340,6 +1347,8 @@ class ChessVisionUI:
         palette.pack(anchor='w',pady=3)
         self.teaching_choice=choice
         reader=ScreenBoardReader.new_profile(crop.size,orientation)
+        if reference is not None:
+            reader.templates={symbol:list(tiles) for symbol,tiles in reference.templates.items()}
         self.teaching_reader=reader
         image_row=ttk.Frame(panel);image_row.pack(fill='x',pady=4)
         canvas=Canvas(image_row,width=280,height=280,highlightthickness=0,bg='#111723')
@@ -1356,7 +1365,8 @@ class ChessVisionUI:
             canvas.create_line(0,n*thumbnail.height/8,thumbnail.width,n*thumbnail.height/8,fill='#00d9a3')
         progress=StringVar()
         ttk.Label(panel,textvariable=progress,wraplength=380).pack(anchor='w')
-        status=StringVar(value='Comece clicando em uma casa vazia.')
+        status=StringVar(value='Importe imagens de casas, uma peça por vez. Salve e continue depois.' if standalone
+                         else 'Clique nas peças ou importe exemplos. O cadastro salvo é reutilizado.')
         ttk.Label(panel,textvariable=status,style='Hint.TLabel',wraplength=380).pack(anchor='w',pady=3)
         undo=[]
         last_click=[None,0.0]
@@ -1428,7 +1438,23 @@ class ChessVisionUI:
             trainer.destroy()
             if parent.winfo_exists():parent.grab_set()
 
+        def save_profile():
+            reader.profile_name=name.get().strip()[:80] or 'Meu tema'
+            try:
+                reader.save(CONFIG.with_name('.reader_draft.json'),allow_incomplete=True)
+                if not reader.missing_symbols:
+                    reader.save(CONFIG.with_name('.reader_templates.json'))
+                    self.screen_reader=reader.for_region(reader.size)
+                    self.cache_status.set(f'Perfil {reader.profile_name} salvo. Pronto para conferir uma partida.')
+                    status.set('Cadastro completo salvo. Pode fechar e usar em outra partida.')
+                else:status.set(f'Progresso salvo. Faltam {len(reader.missing_symbols)} tipos; pode completar depois.')
+                return True
+            except OSError as exc:status.set('Não foi possível salvar: '+str(exc));return False
+
         def use():
+            if standalone:
+                if save_profile() and not reader.missing_symbols:close();on_ready(reader)
+                return
             try:
                 reader.profile_name=name.get().strip()[:80] or 'Meu tema'
                 placement=reader.read(crop)
@@ -1445,7 +1471,7 @@ class ChessVisionUI:
             close()
             on_ready(reader)
 
-        canvas.bind('<Button-1>',click)
+        if not standalone:canvas.bind('<Button-1>',click)
         actions=ttk.Frame(panel);actions.pack(fill='x',pady=4)
         ttk.Button(actions,text='Importar casa…',command=import_tile).pack(side='left')
         ttk.Button(actions,text='Desfazer',command=undo_last).pack(side='left',padx=3)
@@ -1453,6 +1479,7 @@ class ChessVisionUI:
         ttk.Button(actions,text='Cancelar',command=close).pack(side='right',padx=3)
         correction=ttk.Frame(panel);correction.pack(fill='x')
         ttk.Button(correction,text='Limpar tipo selecionado',command=clear_type).pack(side='left')
+        ttk.Button(correction,text='Salvar cadastro',command=save_profile).pack(side='right')
         refresh()
         trainer.protocol('WM_DELETE_WINDOW',close)
         trainer.bind('<Escape>',lambda _:close())
@@ -1517,7 +1544,7 @@ class ChessVisionUI:
             if status!=last_status and not stop.is_set():
                 self.state.ui_events.put(('screen_status',status))
                 last_status=status
-            stop.wait(0.7)
+            stop.wait(0.2)
 
     def apply(self):
         try:

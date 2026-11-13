@@ -14,6 +14,30 @@ from test_screen_reader import render
 
 
 class InterfaceViewTests(unittest.TestCase):
+    def test_piece_bank_saves_and_reopens_without_a_current_position(self):
+        from screen_reader import ScreenBoardReader
+        root=Tk()
+        try:
+            with tempfile.TemporaryDirectory() as temp,patch.object(app,'CONFIG',Path(temp)/'config.json'):
+                ScreenBoardReader(render(chess.Board())).save(Path(temp)/'.reader_templates.json')
+                ui=app.ChessVisionUI(root,app.AnalysisState())
+                trainer=ui.teach_piece_profile(None,'white',lambda reader:None)
+                root.update()
+                def find(widget,text):
+                    for child in widget.winfo_children():
+                        if child.winfo_class()=='TButton' and child.cget('text')==text:return child
+                        result=find(child,text)
+                        if result:return result
+                find(trainer,'Salvar cadastro').invoke()
+                self.assertIsNone(ui.state.board)
+                self.assertTrue((Path(temp)/'.reader_draft.json').exists())
+                self.assertEqual(ui.teaching_reader.missing_symbols,[])
+                find(trainer,'Cancelar').invoke()
+                trainer=ui.teach_piece_profile(None,'white',lambda reader:None)
+                self.assertEqual(ui.teaching_reader.missing_symbols,[])
+                self.assertIsNone(ui.state.board)
+        finally:root.destroy()
+
     def test_teaching_keeps_both_black_rooks_and_can_clear_mistakes(self):
         from screen_reader import PIECE_LABELS
         root=Tk()
